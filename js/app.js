@@ -765,25 +765,70 @@ async function loadSheetData() {
     renderSheet(data);
   } catch (err) {
     console.error('Sheet load error:', err);
-    showToast('❌ Failed to load data', 'error');
+    showToast(`❌ ${err.message}`, 'error');
   }
 }
 async function fetchProtectedSheetData(adminPassword) {
-  const response = await fetch(CONFIG.API_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'getSheetData',
-      adminPassword
-    })
-  });
-  const result = await response.json();
+  let result;
 
-  if (!response.ok || result.status !== 'OK') {
+  try {
+    const response = await fetch(CONFIG.API_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'getSheetData',
+        adminPassword
+      })
+    });
+    result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.message || `Failed to unlock Master Sheet (${response.status})`);
+    }
+  } catch (err) {
+    result = await fetchProtectedSheetDataJsonp(adminPassword);
+  }
+
+  if (result.status !== 'OK') {
     throw new Error(result.message || 'Failed to unlock Master Sheet');
   }
 
   return result.data || [];
+}
+
+function fetchProtectedSheetDataJsonp(adminPassword) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `happySheetData_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const url = new URL(CONFIG.API_ENDPOINT);
+    url.searchParams.set('action', 'getSheetData');
+    url.searchParams.set('adminPassword', adminPassword);
+    url.searchParams.set('callback', callbackName);
+
+    const script = document.createElement('script');
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out loading Master Sheet data'));
+    }, 15000);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      delete window[callbackName];
+      script.remove();
+    }
+
+    window[callbackName] = result => {
+      cleanup();
+      resolve(result);
+    };
+
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Could not connect to Google Sheets'));
+    };
+
+    script.src = url.toString();
+    document.body.appendChild(script);
+  });
 }
 function renderSheet(data) {
   const head = document.getElementById('sheetHead');

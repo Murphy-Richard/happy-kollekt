@@ -40,12 +40,16 @@ function doPost(e) {
 function doGet(e) {
   try {
     const action = e && e.parameter ? e.parameter.action : '';
+    const callback = e && e.parameter ? e.parameter.callback : '';
 
     if (action === 'getSheetData') {
-      return jsonResponse({
-        status: 'ERROR',
-        message: 'Admin password required.'
-      });
+      const result = getProtectedSheetData(e.parameter.adminPassword);
+
+      if (callback) {
+        return javascriptResponse(callback, result);
+      }
+
+      return jsonResponse(result);
     }
 
     return jsonResponse({
@@ -191,4 +195,18 @@ function jsonResponse(payload) {
   return ContentService
     .createTextOutput(JSON.stringify(payload))
     .setMimeType(JSON_MIME);
+}
+
+function javascriptResponse(callback, payload) {
+  const safeCallback = String(callback || '').replace(/[^\w.$]/g, '');
+  if (!safeCallback) {
+    return jsonResponse({
+      status: 'ERROR',
+      message: 'Invalid callback.'
+    });
+  }
+
+  return ContentService
+    .createTextOutput(`${safeCallback}(${JSON.stringify(payload)});`)
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
