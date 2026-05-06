@@ -122,7 +122,11 @@ function showAdminLogin() {
   const toggle = document.getElementById('toggleAdminPassword');
   password.value = '';
   password.type = 'password';
-  if (toggle) toggle.textContent = 'Show';
+  if (toggle) {
+    toggle.setAttribute('aria-label', 'Show password');
+    toggle.setAttribute('title', 'Show password');
+    toggle.classList.remove('visible');
+  }
   password.focus();
 }
 function closeAdminLogin() {
@@ -133,7 +137,11 @@ function toggleAdminPassword() {
   const toggle = document.getElementById('toggleAdminPassword');
   const isHidden = password.type === 'password';
   password.type = isHidden ? 'text' : 'password';
-  if (toggle) toggle.textContent = isHidden ? 'Hide' : 'Show';
+  if (toggle) {
+    toggle.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+    toggle.setAttribute('title', isHidden ? 'Hide password' : 'Show password');
+    toggle.classList.toggle('visible', isHidden);
+  }
   password.focus();
 }
 function verifyAdmin() {
