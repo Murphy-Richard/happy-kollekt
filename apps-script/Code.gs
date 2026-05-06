@@ -5,6 +5,11 @@ const JSON_MIME = ContentService.MimeType.JSON;
 function doPost(e) {
   try {
     const payload = parsePayload(e);
+
+    if (payload.action === 'getSheetData') {
+      return jsonResponse(getProtectedSheetData(payload.adminPassword));
+    }
+
     const result = syncPayloadToSheets(payload);
 
     if (result.duplicate) {
@@ -37,7 +42,10 @@ function doGet(e) {
     const action = e && e.parameter ? e.parameter.action : '';
 
     if (action === 'getSheetData') {
-      return jsonResponse(getSheetData());
+      return jsonResponse({
+        status: 'ERROR',
+        message: 'Admin password required.'
+      });
     }
 
     return jsonResponse({
@@ -143,6 +151,34 @@ function getSheetData() {
     });
     return item;
   });
+}
+
+function getProtectedSheetData(password) {
+  const adminPassword = getAdminPassword();
+  if (!adminPassword) {
+    return {
+      status: 'ERROR',
+      message: 'Admin password is not configured.'
+    };
+  }
+
+  if (password !== adminPassword) {
+    return {
+      status: 'ERROR',
+      message: 'Incorrect password.'
+    };
+  }
+
+  return {
+    status: 'OK',
+    data: getSheetData()
+  };
+}
+
+function getAdminPassword() {
+  return PropertiesService
+    .getScriptProperties()
+    .getProperty('ADMIN_PASSWORD');
 }
 
 function jsonResponse(payload) {

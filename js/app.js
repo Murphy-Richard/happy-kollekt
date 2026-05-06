@@ -1,7 +1,6 @@
 ﻿// ===== CONFIGURATION =====
 const CONFIG = {
   API_ENDPOINT: 'https://script.google.com/a/macros/jobberman.com.gh/s/AKfycbw4qHIg5rgBRn8EflcuE0-nWyDWpiz5_0PwuC0ema-Bg1kfqc-8cPlgqNefyuthsEi5/exec',
-  ADMIN_PASSWORD: 'MurphyMERL2026!',
   QUEUE_KEY: 'happy_pending_submissions',
   LOCAL_DB_KEY: 'happy_db',
   DEVICE_ID_KEY: 'happyDeviceId',
@@ -50,7 +49,7 @@ const CONFIG = {
 
 // ===== STATE =====
 let formState = {
-  collectorName: '', deviceId: '', regionCounter: {}, globalSequence: 0, isSubmitting: false, isSyncing: false, isAdmin: false
+  collectorName: '', deviceId: '', regionCounter: {}, globalSequence: 0, isSubmitting: false, isSyncing: false, isAdmin: false, adminPassword: ''
 };
 
 // ===== INITIALIZATION =====
@@ -58,10 +57,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initializeForm();
   setupEventListeners();
   updatePartnerDisplays();
-  // Check admin login
-  if (localStorage.getItem('happyAdmin') === 'true') {
-    formState.isAdmin = true;
-  }
   syncPendingSubmissions();
 });
 
@@ -144,17 +139,23 @@ function toggleAdminPassword() {
   }
   password.focus();
 }
-function verifyAdmin() {
+async function verifyAdmin() {
   const pwd = document.getElementById('adminPassword').value;
-  if (pwd === CONFIG.ADMIN_PASSWORD) {
+  if (!pwd) {
+    showToast('Enter the Master Sheet password', 'error');
+    return;
+  }
+
+  try {
+    const data = await fetchProtectedSheetData(pwd);
     formState.isAdmin = true;
-    localStorage.setItem('happyAdmin', 'true');
+    formState.adminPassword = pwd;
     closeAdminLogin();
     showToast('✅ Admin access granted', 'success');
-    loadSheetData();
+    renderSheet(data);
     setView('sheet');
-  } else {
-    showToast('❌ Incorrect password', 'error');
+  } catch (err) {
+    showToast(`❌ ${err.message}`, 'error');
   }
 }
 
@@ -760,13 +761,29 @@ async function loadSheetData() {
   const status = document.getElementById('sheetBody').querySelector('td');
   if (status) status.textContent = '🔄 Loading from Google Sheets...';
   try {
-    const res = await fetch(CONFIG.API_ENDPOINT + '?action=getSheetData');
-    const data = await res.json();
+    const data = await fetchProtectedSheetData(formState.adminPassword);
     renderSheet(data);
   } catch (err) {
     console.error('Sheet load error:', err);
     showToast('❌ Failed to load data', 'error');
   }
+}
+async function fetchProtectedSheetData(adminPassword) {
+  const response = await fetch(CONFIG.API_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'getSheetData',
+      adminPassword
+    })
+  });
+  const result = await response.json();
+
+  if (!response.ok || result.status !== 'OK') {
+    throw new Error(result.message || 'Failed to unlock Master Sheet');
+  }
+
+  return result.data || [];
 }
 function renderSheet(data) {
   const head = document.getElementById('sheetHead');
