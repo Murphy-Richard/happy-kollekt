@@ -1,5 +1,5 @@
-const SHEET_NAME = 'gid=0';
 const SPREADSHEET_ID = '15wqqAiJIbw6lfzwZFG_fGiklG-jFMCCpQhkaWVtPSzA';
+const SHEET_GID = 0;
 const JSON_MIME = ContentService.MimeType.JSON;
 
 function doPost(e) {
@@ -70,7 +70,13 @@ function parsePayload(e) {
 
 function getResponseSheet() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  return ss.getSheets()[0];
+  const sheet = ss.getSheets().find(item => item.getSheetId() === SHEET_GID);
+
+  if (!sheet) {
+    throw new Error(`Target sheet gid=${SHEET_GID} was not found.`);
+  }
+
+  return sheet;
 }
 
 function syncPayloadToSheets(payload) {
