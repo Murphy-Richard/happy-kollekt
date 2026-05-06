@@ -1,6 +1,6 @@
 ﻿// ===== CONFIGURATION =====
 const CONFIG = {
-  API_ENDPOINT: 'https://script.google.com/a/macros/jobberman.com.gh/s/AKfycbw4qHIg5rgBRn8EflcuE0-nWyDWpiz5_0PwuC0ema-Bg1kfqc-8cPlgqNefyuthsEi5/exec',
+  API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbwmdFeGkuKQWJURON7tgvABk4z1uopV3CjL2LwsKzYvO2xdZ7a3pT_1PyHw4zxi4eLJ/exec',
   QUEUE_KEY: 'happy_pending_submissions',
   LOCAL_DB_KEY: 'happy_db',
   DEVICE_ID_KEY: 'happyDeviceId',
