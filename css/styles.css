@@ -1,7 +1,8 @@
 ﻿* { font-family: 'Inter', sans-serif; box-sizing: border-box; }
 body { background-color: #f8fafc; color: #1e293b; line-height: 1.5; }
 /* ===== NAVIGATION / HEADER ===== */
-.navbar { background: linear-gradient(135deg, #5B45E8, #7C3AED); color: white; padding: 1rem 1rem calc(0.9rem + 1cm); position: sticky; top: 0; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.navbar { background: linear-gradient(135deg, #5B45E8, #7C3AED); color: white; padding: 1rem 1rem calc(0.9rem + 1cm); position: sticky; top: 0; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.2); transform: translateY(0); transition: transform 0.24s ease, box-shadow 0.24s ease; will-change: transform; }
+.navbar.navbar-hidden { transform: translateY(-100%); box-shadow: none; }
 .navbar-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .collector-strip { flex: 1; font-size: 0.7rem; opacity: 0.9; }
 .collector-strip span { font-weight: 700; }

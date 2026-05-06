@@ -56,6 +56,7 @@ let formState = {
 document.addEventListener('DOMContentLoaded', () => {
   initializeForm();
   setupEventListeners();
+  setupSmartHeader();
   updatePartnerDisplays();
   syncPendingSubmissions();
 });
@@ -100,6 +101,37 @@ function setupEventListeners() {
   document.getElementById('mainForm').addEventListener('invalid', e => {
     showToast(`Please complete: ${getFieldLabel(e.target)}`, 'error');
   }, true);
+}
+
+function setupSmartHeader() {
+  const navbar = document.querySelector('.navbar');
+  if (!navbar) return;
+
+  let lastScrollY = window.scrollY;
+  let ticking = false;
+
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+
+    window.requestAnimationFrame(() => {
+      const currentScrollY = window.scrollY;
+      const scrollingDown = currentScrollY > lastScrollY;
+      const movedEnough = Math.abs(currentScrollY - lastScrollY) > 8;
+
+      if (currentScrollY <= 12) {
+        navbar.classList.remove('navbar-hidden');
+      } else if (movedEnough && scrollingDown) {
+        navbar.classList.add('navbar-hidden');
+      } else if (movedEnough) {
+        navbar.classList.remove('navbar-hidden');
+      }
+
+      lastScrollY = currentScrollY;
+      ticking = false;
+    });
+
+    ticking = true;
+  }, { passive: true });
 }
 
 // ===== VIEW SWITCHING =====
