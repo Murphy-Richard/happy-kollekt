@@ -56,7 +56,6 @@ let formState = {
 document.addEventListener('DOMContentLoaded', () => {
   initializeForm();
   setupEventListeners();
-  setupSmartHeader();
   updatePartnerDisplays();
   syncPendingSubmissions();
 });
@@ -101,54 +100,6 @@ function setupEventListeners() {
   document.getElementById('mainForm').addEventListener('invalid', e => {
     showToast(`Please complete: ${getFieldLabel(e.target)}`, 'error');
   }, true);
-}
-
-function setupSmartHeader() {
-  const navbar = document.querySelector('.navbar');
-  if (!navbar) return;
-
-  const getScrollY = () => window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-  let lastScrollY = getScrollY();
-  let touchStartY = 0;
-  let ticking = false;
-
-  function setHeaderForDirection(currentScrollY, scrollingDown, movedEnough) {
-    if (currentScrollY <= 12) {
-      navbar.classList.remove('navbar-hidden');
-    } else if (movedEnough && scrollingDown) {
-      navbar.classList.add('navbar-hidden');
-    } else if (movedEnough) {
-      navbar.classList.remove('navbar-hidden');
-    }
-  }
-
-  window.addEventListener('scroll', () => {
-    if (ticking) return;
-
-    window.requestAnimationFrame(() => {
-      const currentScrollY = getScrollY();
-      const scrollingDown = currentScrollY > lastScrollY;
-      const movedEnough = Math.abs(currentScrollY - lastScrollY) > 8;
-
-      setHeaderForDirection(currentScrollY, scrollingDown, movedEnough);
-      lastScrollY = currentScrollY;
-      ticking = false;
-    });
-
-    ticking = true;
-  }, { passive: true });
-
-  window.addEventListener('touchstart', event => {
-    touchStartY = event.touches[0]?.clientY || 0;
-  }, { passive: true });
-
-  window.addEventListener('touchmove', event => {
-    const currentTouchY = event.touches[0]?.clientY || touchStartY;
-    const touchDelta = touchStartY - currentTouchY;
-    const movedEnough = Math.abs(touchDelta) > 8;
-
-    setHeaderForDirection(getScrollY(), touchDelta > 0, movedEnough);
-  }, { passive: true });
 }
 
 // ===== VIEW SWITCHING =====
