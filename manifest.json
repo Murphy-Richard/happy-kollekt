@@ -1,0 +1,16 @@
+{
+  "name": "HAPPY Program Field Data Collection",
+  "short_name": "HAPPY Data",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e40af",
+  "icons": [
+    {
+      "src": "assets/jobberman-ghana-logo.jpg",
+      "sizes": "any",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}
