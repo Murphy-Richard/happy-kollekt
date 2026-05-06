@@ -759,7 +759,10 @@
     <div class="admin-lock-icon">🔐</div>
     <h3>Admin Access</h3>
     <p class="text-xs text-slate-600 mb-2">Enter password to unlock the Master Sheet</p>
-    <input type="password" id="adminPassword" placeholder="Enter admin password">
+    <div class="password-field">
+      <input type="password" id="adminPassword" placeholder="Enter admin password">
+      <button type="button" id="toggleAdminPassword" class="password-toggle" onclick="toggleAdminPassword()">Show</button>
+    </div>
     <div class="btn-group">
       <button onclick="verifyAdmin()" class="btn-primary" style="padding:0.625rem">Unlock</button>
       <button onclick="closeAdminLogin()" class="btn-secondary" style="padding:0.625rem">Cancel</button>

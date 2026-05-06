@@ -118,11 +118,23 @@ function setView(view) {
 // ===== ADMIN LOGIN =====
 function showAdminLogin() {
   document.getElementById('adminModal').classList.remove('hidden');
-  document.getElementById('adminPassword').value = '';
-  document.getElementById('adminPassword').focus();
+  const password = document.getElementById('adminPassword');
+  const toggle = document.getElementById('toggleAdminPassword');
+  password.value = '';
+  password.type = 'password';
+  if (toggle) toggle.textContent = 'Show';
+  password.focus();
 }
 function closeAdminLogin() {
   document.getElementById('adminModal').classList.add('hidden');
+}
+function toggleAdminPassword() {
+  const password = document.getElementById('adminPassword');
+  const toggle = document.getElementById('toggleAdminPassword');
+  const isHidden = password.type === 'password';
+  password.type = isHidden ? 'text' : 'password';
+  if (toggle) toggle.textContent = isHidden ? 'Hide' : 'Show';
+  password.focus();
 }
 function verifyAdmin() {
   const pwd = document.getElementById('adminPassword').value;
