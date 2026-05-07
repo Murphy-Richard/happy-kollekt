@@ -210,7 +210,7 @@ function populateJobRoles() {
   const roleSel = document.getElementById('jobRole');
   roleSel.innerHTML = '<option value="">Select</option>';
   if (sector && industry && jobType && CONFIG.SECTOR_DATA[sector]?.[industry]) {
-    CONFIG.SECTOR_DATA[sector][industry].forEach(role => {
+    CONFIG.SECTOR_DATA[sector][industry].filter(role => classifyJobRole(role) === jobType).forEach(role => {
       const opt = document.createElement('option');
       opt.value = role; opt.textContent = role;
       roleSel.appendChild(opt);
@@ -242,13 +242,31 @@ function populatePlacementJobRoles() {
   const roleSel = document.getElementById('plJobRole');
   roleSel.innerHTML = '<option value="">Select</option>';
   if (sector && industry && jobType && CONFIG.SECTOR_DATA[sector]?.[industry]) {
-    CONFIG.SECTOR_DATA[sector][industry].forEach(role => {
+    CONFIG.SECTOR_DATA[sector][industry].filter(role => classifyJobRole(role) === jobType).forEach(role => {
       const opt = document.createElement('option');
       opt.value = role; opt.textContent = role;
       roleSel.appendChild(opt);
     });
     roleSel.disabled = false;
   }
+}
+
+function classifyJobRole(role) {
+  const text = role.toLowerCase();
+
+  if (/\b(manager|director|principal|dean|registrar|administrator|superintendent|cto|lead|head)\b/.test(text)) {
+    return 'Management';
+  }
+
+  if (/\b(accountant|bookkeeper|officer|coordinator|specialist|analyst|secretary|clerk|cashier|teller|buyer|recruiter|writer|controller|auditor|agent|rep|representative|relationship|records|admissions|documentation|dispatcher)\b/.test(text)) {
+    return 'Administrative';
+  }
+
+  if (/\b(cleaner|security|guard|driver|loader|laborer|worker|operator|attendant|hand|janitor|gardener|courier|picker|stocker|sanitation|bellhop|housekeeper|room|laundry|shelf|storekeeper|warehouse|front desk|cashier|helper|assistant)\b/.test(text)) {
+    return 'Support';
+  }
+
+  return 'Technical';
 }
 
 // ===== CONDITIONAL FIELD TOGGLES =====
