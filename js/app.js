@@ -187,6 +187,17 @@ function populateDistricts(regId, distId) {
 }
 
 // ===== CASCADE: Sector → Industry → Job Type → Job Role =====
+function populateJobTypeOptions(select) {
+  select.innerHTML = '<option value="">Select</option>';
+  ['Management', 'Technical', 'Administrative', 'Support'].forEach(type => {
+    const opt = document.createElement('option');
+    opt.value = type;
+    opt.textContent = type;
+    select.appendChild(opt);
+  });
+  select.disabled = false;
+}
+
 function populateIndustries() {
   const sector = document.getElementById('sector').value;
   const indSel = document.getElementById('industry');
@@ -202,7 +213,17 @@ function populateIndustries() {
     indSel.disabled = false;
   }
 }
-function populateJobTypes() { document.getElementById('jobType').disabled = false; }
+function populateJobTypes() {
+  const industry = document.getElementById('industry').value;
+  const typeSel = document.getElementById('jobType');
+  const roleSel = document.getElementById('jobRole');
+  roleSel.innerHTML = '<option value="">Select</option>';
+  roleSel.disabled = true;
+
+  if (industry) {
+    populateJobTypeOptions(typeSel);
+  }
+}
 function populateJobRoles() {
   const sector = document.getElementById('sector').value;
   const industry = document.getElementById('industry').value;
@@ -234,7 +255,17 @@ function populatePlacementIndustries() {
     indSel.disabled = false;
   }
 }
-function populatePlacementJobTypes() { document.getElementById('plJobType').disabled = false; }
+function populatePlacementJobTypes() {
+  const industry = document.getElementById('plIndustry').value;
+  const typeSel = document.getElementById('plJobType');
+  const roleSel = document.getElementById('plJobRole');
+  roleSel.innerHTML = '<option value="">Select</option>';
+  roleSel.disabled = true;
+
+  if (industry) {
+    populateJobTypeOptions(typeSel);
+  }
+}
 function populatePlacementJobRoles() {
   const sector = document.getElementById('plSector').value;
   const industry = document.getElementById('plIndustry').value;
