@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=5.0">
 <meta name="theme-color" content="#5B45E8">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/styles.css">
 </head>
-<body class="pb-16">
+<body class="pb-4">
 
 <!-- NAVIGATION -->
 <nav class="navbar">
@@ -23,10 +23,11 @@
     </div>
   </div>
   <div class="nav-tabs">
-    <button class="nav-tab active" onclick="setView('form')" id="tab-form">&#x1F4DD; Entry</button>
-    <button class="nav-tab" onclick="openAdminView('dashboard')" id="tab-dashboard">&#x1F4CA; Dashboard</button>
-    <button class="nav-tab" onclick="openAdminView('report')" id="tab-report">&#x1F4CB; Report</button>
-    <button class="nav-tab" onclick="openAdminView('sheet')" id="tab-sheet">&#x1F5C3; Master</button>
+    <button class="nav-tab active" onclick="setView('form')" id="tab-form">&#x1F4DD; <span>Entry</span></button>
+    <button class="nav-tab" onclick="openAdminView('dashboard')" id="tab-dashboard">&#x1F4CA; <span>Dashboard</span></button>
+    <button class="nav-tab" onclick="openAdminView('report')" id="tab-report">&#x1F4CB; <span>Report</span></button>
+    <button class="nav-tab" onclick="openAdminView('sheet')" id="tab-sheet">&#x1F5C3; <span>Master</span></button>
+    <button class="nav-tab" onclick="openAdminView('batch')" id="tab-batch">&#x1F3ED; <span>Batch</span></button>
   </div>
 </nav>
 
@@ -44,6 +45,101 @@
     <h2 style="font-weight:900;font-size:1.25rem;margin:1rem 0 0.5rem;">Access Required</h2>
     <p style="color:#64748b;font-size:0.875rem;margin-bottom:1.5rem;">This page requires a valid consent link or admin access to continue.</p>
     <p style="color:#94a3b8;font-size:0.75rem;">If you were sent a link, please use that link to access this form.</p>
+  </div>
+
+  <!-- ADMIN STAGE SELECTION SCREEN -->
+  <div id="adminStageScreen" class="hidden" style="max-width:520px;margin:2rem auto;">
+    <div style="background:#fff;border-radius:1rem;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:2rem;">
+      <h2 style="font-weight:900;font-size:1.1rem;margin-bottom:0.25rem;">Admin Entry Mode</h2>
+      <p style="color:#64748b;font-size:0.82rem;margin-bottom:1.5rem;">Select the stage you are collecting data for.</p>
+      <div style="display:flex;flex-direction:column;gap:0.75rem;">
+        <button type="button" onclick="adminSelectStage('registration')"
+          style="display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;border-radius:0.75rem;border:2px solid #e2e8f0;background:#fff;cursor:pointer;text-align:left;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='#5B45E8'" onmouseout="this.style.borderColor='#e2e8f0'">
+          <div style="width:2.25rem;height:2.25rem;background:#ede9fe;border-radius:0.5rem;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;">&#x1F4DD;</div>
+          <div>
+            <div style="font-weight:800;font-size:0.9rem;color:#1e293b;">New Participant</div>
+            <div style="font-size:0.75rem;color:#64748b;margin-top:0.15rem;">Register a new participant &mdash; fills in personal information and baseline data.</div>
+          </div>
+        </button>
+        <button type="button" onclick="adminSelectStage('capacity')"
+          style="display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;border-radius:0.75rem;border:2px solid #e2e8f0;background:#fff;cursor:pointer;text-align:left;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='#7c3aed'" onmouseout="this.style.borderColor='#e2e8f0'">
+          <div style="width:2.25rem;height:2.25rem;background:#f5f3ff;border-radius:0.5rem;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;">&#x1F393;</div>
+          <div>
+            <div style="font-weight:800;font-size:0.9rem;color:#1e293b;">Capacity Building</div>
+            <div style="font-size:0.75rem;color:#64748b;margin-top:0.15rem;">Record training completion for an existing participant.</div>
+          </div>
+        </button>
+        <button type="button" onclick="adminSelectStage('placement')"
+          style="display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;border-radius:0.75rem;border:2px solid #e2e8f0;background:#fff;cursor:pointer;text-align:left;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='#10b981'" onmouseout="this.style.borderColor='#e2e8f0'">
+          <div style="width:2.25rem;height:2.25rem;background:#f0fdf4;border-radius:0.5rem;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;">&#x1F4BC;</div>
+          <div>
+            <div style="font-weight:800;font-size:0.9rem;color:#1e293b;">Job Placement</div>
+            <div style="font-size:0.75rem;color:#64748b;margin-top:0.15rem;">Record individual job placement for an existing participant. For bulk placement, use the Batch tab.</div>
+          </div>
+        </button>
+        <button type="button" onclick="adminSelectStage('update-registration')"
+          style="display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;border-radius:0.75rem;border:2px solid #e2e8f0;background:#fff;cursor:pointer;text-align:left;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#e2e8f0'">
+          <div style="width:2.25rem;height:2.25rem;background:#fffbeb;border-radius:0.5rem;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;">&#x270F;&#xFE0F;</div>
+          <div>
+            <div style="font-weight:800;font-size:0.9rem;color:#1e293b;">Update Registration</div>
+            <div style="font-size:0.75rem;color:#64748b;margin-top:0.15rem;">Complete or correct registration info for a participant whose consent was taken but form was not finished.</div>
+          </div>
+        </button>
+      </div>
+      <p style="font-size:0.72rem;color:#94a3b8;margin-top:1.25rem;text-align:center;">
+        For bulk placement of multiple participants at one employer, use the <strong>&#x1F3ED; Batch</strong> tab.
+      </p>
+    </div>
+  </div>
+
+  <!-- INDIVIDUAL PLACEMENT LOOKUP SCREEN -->
+  <div id="placementLookupScreen" class="hidden" style="max-width:480px;margin:2rem auto;background:#fff;border-radius:1rem;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:2rem;">
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.5rem;">
+      <button type="button" onclick="showAdminStageScreen()" style="font-size:0.75rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.3rem 0.65rem;cursor:pointer;">&larr; Back</button>
+      <div>
+        <h2 style="font-weight:900;font-size:1rem;margin:0;">Job Placement</h2>
+        <p style="color:#64748b;font-size:0.78rem;margin:0;">Enter the participant&rsquo;s ID to load their record.</p>
+      </div>
+    </div>
+    <label style="font-size:0.8rem;font-weight:700;display:block;margin-bottom:0.4rem;">Participant ID</label>
+    <input type="text" id="placementLookupId" placeholder="e.g. HAPPY-2026-000004"
+      style="width:100%;padding:0.6rem 0.75rem;border:1.5px solid #cbd5e1;border-radius:0.5rem;font-size:0.85rem;box-sizing:border-box;margin-bottom:0.75rem;"
+      onkeydown="if(event.key==='Enter') loadParticipantForPlacement()">
+    <button type="button" onclick="loadParticipantForPlacement()"
+      style="width:100%;padding:0.7rem;background:#10b981;color:#fff;border:none;border-radius:0.5rem;font-weight:700;font-size:0.875rem;cursor:pointer;">
+      Load Participant
+    </button>
+    <p id="placementLookupError" class="hidden" style="color:#ef4444;font-size:0.75rem;margin-top:0.5rem;"></p>
+  </div>
+
+  <!-- REGISTRATION UPDATE LOOKUP SCREEN -->
+  <div id="registrationLookupScreen" class="hidden" style="max-width:480px;margin:2rem auto;background:#fff;border-radius:1rem;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:2rem;">
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+      <button type="button" onclick="showAdminStageScreen()" style="font-size:0.75rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.3rem 0.65rem;cursor:pointer;">&larr; Back</button>
+      <div>
+        <h2 style="font-weight:900;font-size:1rem;margin:0;">Update Registration</h2>
+        <p style="color:#64748b;font-size:0.78rem;margin:0;">Look up a participant by ID or phone number.</p>
+      </div>
+    </div>
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:0.5rem;padding:0.65rem 0.85rem;font-size:0.75rem;color:#92400e;margin-bottom:1.25rem;line-height:1.5;">
+      Use this when consent was collected but the registration form was not completed, or when existing info needs to be corrected.
+    </div>
+    <label style="font-size:0.8rem;font-weight:700;display:block;margin-bottom:0.4rem;">Participant ID, Name, Phone, or Ghana Card</label>
+    <input type="text" id="regLookupInput" placeholder="HAPPY ID, name, phone or Ghana Card"
+      style="width:100%;padding:0.6rem 0.75rem;border:1.5px solid #cbd5e1;border-radius:0.5rem;font-size:0.85rem;box-sizing:border-box;margin-bottom:0.75rem;"
+      oninput="document.getElementById('regNameMatchList')?.classList.add('hidden');document.getElementById('regLookupError')?.classList.add('hidden');"
+      onkeydown="if(event.key==='Enter') loadParticipantForRegistration()">
+    <button type="button" id="regLookupBtn" onclick="loadParticipantForRegistration()"
+      style="width:100%;padding:0.7rem;background:#f59e0b;color:#fff;border:none;border-radius:0.5rem;font-weight:700;font-size:0.875rem;cursor:pointer;">
+      Load Participant
+    </button>
+    <p id="regLookupError" class="hidden" style="color:#ef4444;font-size:0.75rem;margin-top:0.5rem;"></p>
+    <!-- Name match list — shown when multiple participants share the same name -->
+    <div id="regNameMatchList" class="hidden" style="margin-top:0.75rem;border:1px solid #fde68a;border-radius:0.5rem;overflow:hidden;"></div>
   </div>
 
   <!-- CAPACITY CONSENT SCREEN -->
@@ -742,12 +838,22 @@
   <!-- DASHBOARD VIEW -->
   <div id="view-dashboard" class="hidden">
     <div class="bg-white p-4 rounded-lg shadow border mb-4">
-      <div class="flex justify-between items-center mb-4">
+      <div class="flex justify-between items-center mb-3">
         <div>
           <h2 class="font-black text-purple-800 uppercase text-xs tracking-widest">Program Dashboard</h2>
           <p id="dashboardTimestamp" style="font-size:0.7rem;color:#94a3b8;margin-top:0.2rem;"></p>
         </div>
-        <button onclick="refreshAdminData('dashboard')" class="bg-purple-600 text-white text-[10px] px-3 py-1 rounded font-bold">Refresh</button>
+        <div class="flex gap-2">
+          <button onclick="printDashboard()" class="bg-slate-500 text-white text-[10px] px-3 py-1 rounded font-bold no-print">&#x1F5A8; Print PDF</button>
+          <button onclick="refreshAdminData('dashboard')" class="bg-purple-600 text-white text-[10px] px-3 py-1 rounded font-bold no-print">Refresh</button>
+        </div>
+      </div>
+      <div id="dashboardFilters" style="display:none;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;padding:0.65rem 0.75rem;background:#f8fafc;border-radius:0.5rem;align-items:center;border:1px solid #e2e8f0;">
+        <input type="date" id="dashFilterStart" class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:160px;" onchange="applyDashboardFilters()" title="Onboarding date from">
+        <input type="date" id="dashFilterEnd"   class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:160px;" onchange="applyDashboardFilters()" title="Onboarding date to">
+        <select id="dashFilterPartner"   class="field-input" style="flex:1;min-width:120px;font-size:0.75rem;max-width:180px;" onchange="applyDashboardFilters()"><option value="">All Partners</option></select>
+        <select id="dashFilterCollector" class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:190px;" onchange="applyDashboardFilters()"><option value="">All Collectors</option></select>
+        <button onclick="clearDashboardFilters()" style="font-size:0.7rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.35rem 0.6rem;cursor:pointer;white-space:nowrap;">Clear</button>
       </div>
       <div id="dashboardContent">
         <p style="text-align:center;color:#94a3b8;padding:2.5rem 1rem;font-size:0.85rem;">Click Refresh to load dashboard</p>
@@ -768,7 +874,12 @@
           <button onclick="exportReportData()" class="bg-slate-500 text-white text-[10px] px-3 py-1 rounded font-bold">Export CSV</button>
         </div>
       </div>
-      <div id="reportFilters" style="display:none;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;padding:0.75rem;background:#f8fafc;border-radius:0.5rem;align-items:center;">
+      <div id="reportFilters" style="display:none;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;padding:0.65rem 0.75rem;background:#f8fafc;border-radius:0.5rem;align-items:center;border:1px solid #e2e8f0;">
+        <input type="date" id="filterStartDate" class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:160px;" onchange="applyReportFilters()" title="Onboarding date from">
+        <input type="date" id="filterEndDate"   class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:160px;" onchange="applyReportFilters()" title="Onboarding date to">
+        <select id="filterCollector" class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:190px;" onchange="applyReportFilters()">
+          <option value="">All Collectors</option>
+        </select>
         <select id="filterPartner" class="field-input" style="flex:1;min-width:120px;font-size:0.75rem;max-width:180px;" onchange="applyReportFilters()">
           <option value="">All Partners</option>
         </select>
@@ -780,17 +891,241 @@
           <option value="Female">Female</option>
           <option value="Male">Male</option>
         </select>
-        <select id="filterStatus" class="field-input" style="flex:1;min-width:110px;font-size:0.75rem;max-width:150px;" onchange="applyReportFilters()">
+        <select id="filterStatus" class="field-input" style="flex:1;min-width:130px;font-size:0.75rem;max-width:165px;" onchange="applyReportFilters()">
           <option value="">All Stages</option>
-          <option value="capacity">Trained</option>
-          <option value="placement">Placed</option>
+          <option value="registered">New Participant</option>
+          <option value="capacity">Capacity Building</option>
+          <option value="placement">Job Placement</option>
         </select>
-        <button onclick="clearReportFilters()" style="font-size:0.7rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.35rem 0.6rem;cursor:pointer;white-space:nowrap;">Clear filters</button>
+        <button onclick="clearReportFilters()" style="font-size:0.7rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.35rem 0.6rem;cursor:pointer;white-space:nowrap;">Clear</button>
       </div>
       <div id="reportContent">
         <p style="text-align:center;color:#94a3b8;padding:2.5rem 1rem;font-size:0.85rem;">Click Refresh to load report</p>
       </div>
     </div>
+  </div>
+
+  <!-- BATCH PLACEMENT VIEW -->
+  <div id="view-batch" class="hidden">
+
+    <!-- Step 1: Employer & Job Details -->
+    <div id="batch-step-1">
+      <div class="bg-white p-4 rounded-lg shadow border mb-4">
+        <div class="flex justify-between items-center mb-4">
+          <div>
+            <h2 class="font-black text-emerald-800 uppercase text-xs tracking-widest">New Placement Batch</h2>
+            <p style="font-size:0.7rem;color:#94a3b8;margin-top:0.2rem;">Step 1 of 3 &mdash; Employer &amp; Job Details</p>
+          </div>
+          <span style="font-size:0.68rem;font-family:monospace;color:#64748b;background:#f0fdf4;padding:0.2rem 0.6rem;border-radius:0.375rem;border:1px solid #d1fae5;">BATCH ID: auto-assigned</span>
+        </div>
+
+        <div class="field-grid">
+          <div class="field-group span-2">
+            <label class="field-label required">Employer Name</label>
+            <input type="text" id="batchEmployerName" class="field-input" required placeholder="e.g., Sentuo Ceramics Ltd">
+          </div>
+          <div class="field-group">
+            <label class="field-label required">Placed By Partner</label>
+            <select id="batchPlacedByPartner" class="field-input" required>
+              <option value="">Select Partner</option>
+              <option value="Jobberman">Jobberman</option>
+              <option value="Agrico">Agrico</option>
+              <option value="YouthEmpower">YouthEmpower</option>
+              <option value="SkillsGH">SkillsGH</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label required">Placement Start Date</label>
+            <input type="date" id="batchStartDate" class="field-input" required>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field-group">
+            <label class="field-label">Placement Region</label>
+            <select id="batchRegion" class="field-input" onchange="batchPopulateDistricts()">
+              <option value="">Select Region</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Placement District</label>
+            <select id="batchDistrict" class="field-input" disabled>
+              <option value="">Select District</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Placement Community</label>
+            <input type="text" id="batchCommunity" class="field-input" placeholder="Town/Community">
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field-group">
+            <label class="field-label required">Sector</label>
+            <select id="batchSector" class="field-input" required onchange="batchPopulateIndustries()">
+              <option value="">Select</option>
+              <option value="Agriculture">Agriculture</option>
+              <option value="Non-Agriculture">Non-Agriculture</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label required">Industry</label>
+            <select id="batchIndustry" class="field-input" required disabled onchange="batchPopulateJobTypes()">
+              <option value="">Select</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label required">Job Type</label>
+            <select id="batchJobType" class="field-input" required disabled onchange="batchPopulateJobRoles()">
+              <option value="">Select</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label required">Job Role</label>
+            <select id="batchJobRole" class="field-input" required disabled>
+              <option value="">Select</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field-group">
+            <label class="field-label required">Employment Type</label>
+            <select id="batchEmploymentType" class="field-input" required>
+              <option value="">Select</option>
+              <option value="Wage">Wage Employment</option>
+              <option value="Self-Employment">Self-Employment</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label required">Employment Category</label>
+            <select id="batchEmploymentCategory" class="field-input" required>
+              <option value="">Select</option>
+              <option value="New">New Employment</option>
+              <option value="Improved">Improved Employment</option>
+              <option value="Additional">Additional Employment</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Contract Type</label>
+            <select id="batchContractType" class="field-input">
+              <option value="">Select</option>
+              <option value="Permanent">Permanent</option>
+              <option value="Fixed-term">Fixed-term</option>
+              <option value="Casual">Casual</option>
+              <option value="Contract">Contract</option>
+              <option value="Internship">Internship</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Work Hours / Week</label>
+            <input type="number" id="batchWorkHours" class="field-input" min="1" max="168" placeholder="e.g., 40">
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field-group">
+            <label class="field-label required">Income (GHS)</label>
+            <select id="batchIncome" class="field-input" required>
+              <option value="">Select</option>
+              <option value="None">None</option>
+              <option value="1-200">1-200</option>
+              <option value="201-500">201-500</option>
+              <option value="501-700">501-700</option>
+              <option value="701-1000">701-1000</option>
+              <option value="1001-1200">1001-1200</option>
+              <option value="1201-1500">1201-1500</option>
+              <option value="1501-1700">1501-1700</option>
+              <option value="1701-2000">1701-2000</option>
+              <option value="Above 2000">Above 2000</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Income Frequency</label>
+            <select id="batchIncomeFreq" class="field-input">
+              <option value="">Select</option>
+              <option value="Daily">Daily</option>
+              <option value="Weekly">Weekly</option>
+              <option value="Monthly">Monthly</option>
+            </select>
+          </div>
+        </div>
+
+        <p id="batchStep1Error" class="hidden" style="color:#ef4444;font-size:0.75rem;margin-bottom:0.75rem;padding:0.5rem 0.75rem;background:#fef2f2;border-radius:0.375rem;"></p>
+        <button type="button" onclick="batchGoToStep2()" class="btn-primary" style="width:100%;margin-top:0.75rem;">
+          Load Eligible Participants &#x2192;
+        </button>
+      </div>
+    </div>
+
+    <!-- Step 2: Select Participants -->
+    <div id="batch-step-2" class="hidden">
+      <div class="bg-white p-4 rounded-lg shadow border mb-4">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <h2 class="font-black text-emerald-800 uppercase text-xs tracking-widest">Select Participants</h2>
+            <p style="font-size:0.7rem;color:#94a3b8;margin-top:0.2rem;">Step 2 of 3 &mdash; Choose who is being placed</p>
+          </div>
+          <button type="button" onclick="batchGoToStep1()" style="font-size:0.72rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.3rem 0.65rem;cursor:pointer;">&larr; Back</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;padding:0.5rem 0.75rem;background:#f0fdf4;border-radius:0.5rem;border-left:3px solid #10b981;">
+          <span id="batchEligibleCount" style="font-size:0.78rem;font-weight:700;color:#065f46;"></span>
+          <div style="display:flex;gap:0.75rem;">
+            <button type="button" onclick="batchSelectAll(true)" style="font-size:0.7rem;color:#5B45E8;background:none;border:none;cursor:pointer;font-weight:700;">Select All</button>
+            <span style="color:#cbd5e1;">|</span>
+            <button type="button" onclick="batchSelectAll(false)" style="font-size:0.7rem;color:#64748b;background:none;border:none;cursor:pointer;">Clear</button>
+          </div>
+        </div>
+
+        <div id="batchParticipantList" style="max-height:420px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:0.5rem;"></div>
+
+        <div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:#f8fafc;border-radius:0.5rem;display:flex;justify-content:space-between;align-items:center;">
+          <span id="batchSelectedCount" style="font-size:0.78rem;font-weight:700;color:#374151;">0 selected</span>
+          <button type="button" onclick="batchGoToStep3()" class="btn-primary" style="padding:0.5rem 1.25rem;">
+            Review Batch &#x2192;
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Review & Confirm -->
+    <div id="batch-step-3" class="hidden">
+      <div class="bg-white p-4 rounded-lg shadow border mb-4">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <h2 class="font-black text-emerald-800 uppercase text-xs tracking-widest">Review &amp; Confirm</h2>
+            <p style="font-size:0.7rem;color:#94a3b8;margin-top:0.2rem;">Step 3 of 3 &mdash; Confirm batch placement</p>
+          </div>
+          <button type="button" onclick="batchGoToStep2()" style="font-size:0.72rem;color:#64748b;background:none;border:1px solid #cbd5e1;border-radius:0.375rem;padding:0.3rem 0.65rem;cursor:pointer;">&larr; Back</button>
+        </div>
+
+        <div id="batchReviewSummary" style="background:#f0fdf4;border-radius:0.5rem;padding:0.75rem 1rem;margin-bottom:1rem;border-left:3px solid #10b981;font-size:0.8rem;"></div>
+
+        <p style="font-size:0.68rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Participants Being Placed</p>
+        <div id="batchReviewTable" style="overflow-x:auto;margin-bottom:1.25rem;border:1px solid #e2e8f0;border-radius:0.5rem;"></div>
+
+        <p id="batchStep3Error" class="hidden" style="color:#ef4444;font-size:0.75rem;margin-bottom:0.75rem;padding:0.5rem 0.75rem;background:#fef2f2;border-radius:0.375rem;"></p>
+        <button type="button" id="batchSubmitBtn" onclick="submitBatchPlacement()" class="btn-primary" style="width:100%;background:#10b981;border-color:#10b981;">
+          &#10003; Confirm &amp; Submit Batch
+        </button>
+      </div>
+    </div>
+
+    <!-- Batch Success -->
+    <div id="batch-success" class="hidden">
+      <div class="bg-white p-4 rounded-lg shadow border mb-4" style="text-align:center;padding:3rem 1.5rem;">
+        <div style="font-size:3rem;margin-bottom:1rem;color:#10b981;">&#10003;</div>
+        <h2 style="font-weight:900;font-size:1.25rem;color:#10b981;margin-bottom:0.5rem;">Batch Submitted!</h2>
+        <p id="batchSuccessMessage" style="color:#64748b;font-size:0.875rem;margin-bottom:0.75rem;"></p>
+        <p id="batchSuccessId" style="font-family:monospace;font-size:0.85rem;color:#374151;background:#f0fdf4;padding:0.5rem 1.25rem;border-radius:0.5rem;display:inline-block;margin-bottom:1.75rem;border:1px solid #d1fae5;"></p>
+        <div style="display:flex;gap:0.75rem;justify-content:center;">
+          <button type="button" onclick="resetBatchPlacement()" class="btn-primary" style="background:#10b981;border-color:#10b981;">New Batch</button>
+          <button type="button" onclick="openAdminView('sheet')" class="btn-secondary">View Master Sheet</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- MASTER SHEET VIEW -->

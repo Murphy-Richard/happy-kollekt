@@ -10,7 +10,22 @@ body { background-color: #f8fafc; color: #1e293b; line-height: 1.5; }
 .nav-tab { padding: 0.375rem 0.75rem; font-size: 0.75rem; font-weight: 600; border-radius: 0.375rem; cursor: pointer; transition: all 0.2s; color: white; background: transparent; border: none; white-space: nowrap; }
 .nav-tab.active { background: white; color: #4F46E5; }
 .nav-tab:not(.active):hover { background: rgba(255,255,255,0.2); }
-@media (max-width: 640px) { .navbar { flex-wrap: wrap; } .nav-tabs { width: 100%; } .nav-tab { flex: 1; } }
+@media (max-width: 640px) {
+  .navbar { flex-wrap: wrap; }
+  .nav-tabs {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    justify-content: flex-start;
+  }
+  .nav-tabs::-webkit-scrollbar { display: none; }
+  .nav-tab { flex: 0 0 auto; padding: 0.375rem 0.6rem; font-size: 0.7rem; }
+}
+@media (max-width: 400px) {
+  .nav-tab span { display: none; }
+  .nav-tab { padding: 0.375rem 0.5rem; font-size: 0.85rem; }
+}
 /* ===== FORM SECTIONS ===== */
 .form-section { background: white; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 1.25rem; padding: 1.25rem; border-top: 4px solid #1e40af; }
 .form-section.purple { border-top-color: #7c3aed; }
@@ -44,7 +59,7 @@ body { background-color: #f8fafc; color: #1e293b; line-height: 1.5; }
 .checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.375rem; margin-top: 0.375rem; }
 @media (min-width: 640px) { .checkbox-grid { grid-template-columns: repeat(3, 1fr); } }
 .checkbox-label { display: flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; color: #334155; cursor: pointer; }
-.checkbox-label input[type="checkbox"] { width: 14px; height: 14px; accent-color: #1e40af; }
+.checkbox-label input[type="checkbox"] { width: 18px; height: 18px; accent-color: #1e40af; flex-shrink: 0; }
 /* ===== BUTTONS ===== */
 .btn-primary { width: 100%; background: #1e40af; color: white; font-weight: 700; padding: 0.875rem; border-radius: 0.75rem; border: none; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.875rem; }
 .btn-primary:hover { background: #1a3696; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(30,64,175,0.3); }
@@ -94,3 +109,32 @@ body { background-color: #f8fafc; color: #1e293b; line-height: 1.5; }
 /* ===== FOOTER ===== */
 .footer { text-align: center; padding: 1.5rem 1rem; color: #64748b; font-size: 0.75rem; margin-top: 2rem; }
 .footer strong { color: #1e40af; }
+/* ===== RESPONSIVE UTILITIES ===== */
+.span-2 { grid-column: span 2; }
+@media (max-width: 767px) { .span-2 { grid-column: span 1; } }
+/* Batch participant list: shorter on small screens so the footer button stays visible */
+@media (max-width: 600px) {
+  #batchParticipantList { max-height: 260px; }
+}
+/* ===== TREND CHART ===== */
+.trend-chart-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; padding: 0 0.25rem; }
+.trend-chart { display: flex; align-items: flex-end; gap: 4px; padding-bottom: 1.6rem; position: relative; min-width: max-content; }
+.trend-chart::after { content: ''; position: absolute; bottom: 1.6rem; left: 0; right: 0; height: 1px; background: #e2e8f0; pointer-events: none; }
+.trend-period { display: flex; flex-direction: column; align-items: center; width: 32px; }
+.trend-bar-wrap { display: flex; gap: 2px; align-items: flex-end; height: 64px; width: 100%; }
+.trend-bar-consent, .trend-bar-reg { flex: 1; border-radius: 2px 2px 0 0; min-height: 2px; }
+.trend-bar-consent { background: #5B45E8; }
+.trend-bar-reg     { background: #3b82f6; }
+.trend-label { font-size: 0.5rem; color: #94a3b8; margin-top: 0.3rem; white-space: nowrap; text-align: center; max-width: 32px; overflow: hidden; text-overflow: ellipsis; }
+/* ===== PRINT STYLES ===== */
+@media print {
+  .no-print, .navbar, #dashboardFilters, footer, #toast,
+  #view-form, #view-sheet, #view-report, #view-batch,
+  .admin-modal { display: none !important; }
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body { background: white !important; padding: 0 !important; margin: 0 !important; font-size: 11pt; }
+  #view-dashboard { display: block !important; }
+  .bg-white { box-shadow: none !important; border: 1px solid #e2e8f0 !important; }
+  .max-w-7xl { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
+  @page { margin: 1.5cm; size: A4; }
+}

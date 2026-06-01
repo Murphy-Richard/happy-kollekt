@@ -8,6 +8,7 @@ const SUBMISSION_METADATA_SHEET_NAME = 'Submission Metadata';
 const PARTICIPANT_INFO_SHEET_NAME    = 'Participant Information';
 const CAPACITY_BUILDING_SHEET_NAME   = 'Capacity Building / Training';
 const JOB_PLACEMENT_SHEET_NAME       = 'Job Placement';
+const PLACEMENT_BATCHES_SHEET_NAME   = 'Placement Batches';
 
 // ─── OTHER CONSTANTS ─────────────────────────────────────────────────────────
 const PARTICIPANT_PREFIX = 'HAPPY-2026-';
@@ -47,7 +48,15 @@ const MASTER_HEADERS = [
   'currentlyEmployed', 'currentEmployer', 'currentJobRoleAlt', 'currentIncomeAlt',
   'hasCv', 'cvUploadName', 'cvUploadType', 'cvUploadSize',
   'participantPhoneNormalized', 'participantEmailNormalized', 'ghanaCardNormalized', 'adminNotes',
-  'legacyParticipantId'
+  'legacyParticipantId', 'batchId'
+];
+
+const PLACEMENT_BATCHES_HEADERS = [
+  'BATCH ID', 'EMPLOYER NAME', 'SECTOR', 'INDUSTRY', 'JOB TYPE', 'JOB ROLE',
+  'EMPLOYMENT TYPE', 'EMPLOYMENT CATEGORY', 'CONTRACT TYPE', 'WORK HOURS',
+  'PLACEMENT INCOME', 'PLACEMENT INCOME FREQ', 'PLACEMENT START DATE',
+  'PLACEMENT REGION', 'PLACEMENT DISTRICT', 'PLACEMENT COMMUNITY',
+  'PLACED BY PARTNER', 'PARTICIPANT COUNT', 'CREATED AT', 'CREATED BY'
 ];
 
 const AUDIT_HEADERS = [
@@ -80,7 +89,7 @@ const CAPACITY_BUILDING_HEADERS = [
 ];
 
 const JOB_PLACEMENT_HEADERS = [
-  'PARTICIPANT ID', 'SUBMISSION ID',
+  'PARTICIPANT ID', 'SUBMISSION ID', 'BATCH ID',
   'PLACED BY PARTNER', 'PLACEMENT START DATE', 'PLACEMENT REGION', 'PLACEMENT DISTRICT',
   'PLACEMENT COMMUNITY', 'SECTOR', 'INDUSTRY', 'JOB TYPE', 'JOB ROLE',
   'EMPLOYMENT TYPE', 'EMPLOYMENT CATEGORY', 'PLACEMENT INCOME', 'PLACEMENT INCOME FREQ',
@@ -109,17 +118,21 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const action  = payload.action || 'saveParticipantInfo';
 
-    if (action === 'getParticipantByToken')  return jsonResponse(getParticipantByToken(payload.token));
-    if (action === 'getParticipantById')     return jsonResponse(getParticipantById(payload.participantId));
-    if (action === 'saveParticipantInfo')    return jsonResponse(saveParticipantInfo(payload));
-    if (action === 'submitCapacityBuilding') return jsonResponse(saveParticipantInfo(payload, 'capacity'));
-    if (action === 'submitJobPlacement')     return jsonResponse(saveParticipantInfo(payload, 'placement'));
-    if (action === 'updateCvStatus')         return jsonResponse(updateCvStatus(payload));
-    if (action === 'adminUpdateParticipant') return jsonResponse(adminUpdateParticipant(payload));
-    if (action === 'getSheetData')           return jsonResponse(getProtectedSheetData(payload.adminPassword, payload.sheetName));
-    if (action === 'getReportStats')         return jsonResponse(getReportStats());
-    if (action === 'refreshDashboard')       return jsonResponse(refreshDashboard(payload.adminPassword));
-    if (action === 'importFromSheet')        return jsonResponse(importFromSheet(payload));
+    if (action === 'getParticipantByToken')       return jsonResponse(getParticipantByToken(payload.token));
+    if (action === 'getParticipantById')          return jsonResponse(getParticipantById(payload.participantId));
+    if (action === 'getParticipantByLookup')      return jsonResponse(getParticipantByLookup(payload.query));
+    if (action === 'saveParticipantInfo')         return jsonResponse(saveParticipantInfo(payload));
+    if (action === 'submitCapacityBuilding')      return jsonResponse(saveParticipantInfo(payload, 'capacity'));
+    if (action === 'submitJobPlacement')          return jsonResponse(saveParticipantInfo(payload, 'placement'));
+    if (action === 'updateCvStatus')              return jsonResponse(updateCvStatus(payload));
+    if (action === 'adminUpdateParticipant')      return jsonResponse(adminUpdateParticipant(payload));
+    if (action === 'getSheetData')                return jsonResponse(getProtectedSheetData(payload.adminPassword, payload.sheetName));
+    if (action === 'getReportStats')              return jsonResponse(getReportStats());
+    if (action === 'refreshDashboard')            return jsonResponse(refreshDashboard(payload.adminPassword));
+    if (action === 'importFromSheet')             return jsonResponse(importFromSheet(payload));
+    if (action === 'generateNameMismatchReport')  return jsonResponse(generateNameMismatchReport(payload.adminPassword));
+    if (action === 'getEligibleForPlacement')     return jsonResponse(getEligibleForPlacement(payload.adminPassword));
+    if (action === 'submitPlacementBatch')        return jsonResponse(submitPlacementBatch(payload));
 
     throw new Error('Unsupported action: ' + action);
   } catch (err) {
@@ -175,6 +188,82 @@ function getParticipantById(participantId) {
   return { status: 'OK', participant };
 }
 
+// ─── FLEXIBLE PARTICIPANT LOOKUP ─────────────────────────────────────────────
+// Accepts: HAPPY ID, name (full / partial), phone, or Ghana Card.
+// Returns { status:'OK', participant } for a single match.
+// Returns { status:'MULTIPLE', participants:[…] } when a name query matches > 1 record.
+function getParticipantByLookup(query) {
+  if (!query) throw new Error('Missing search query.');
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const q       = String(query).trim();
+
+  // 1. Participant ID
+  var row = findParticipantRow(master, headers, { participantId: q.toUpperCase() });
+
+  // 2. Normalized phone
+  if (row < 1) {
+    const phone = normalizePhone(q);
+    if (phone) row = findParticipantRow(master, headers, { phone: phone });
+  }
+
+  // 3. Ghana Card
+  if (row < 1) {
+    const card = normalizeGhanaCard(q);
+    if (/^GHA-/i.test(q) && card) row = findParticipantRow(master, headers, { ghanaCard: card });
+  }
+
+  // 4. Name search — may return multiple
+  if (row < 1 && q.length >= 2) {
+    const nameRows = findParticipantRowsByName(master, headers, q);
+    if (nameRows.length === 1) {
+      row = nameRows[0];
+    } else if (nameRows.length > 1) {
+      const participants = nameRows.map(function(r) {
+        const p = rowToObject(headers, master.getRange(r, 1, 1, headers.length).getValues()[0]);
+        return {
+          participantId: p.participantId  || '',
+          surname:       p.surname        || '',
+          firstName:     p.firstName      || '',
+          telephone:     p.telephone      || '',
+          region:        p.region         || '',
+          currentStage:  p.currentStage   || ''
+        };
+      });
+      return { status: 'MULTIPLE', participants: participants, count: participants.length };
+    }
+  }
+
+  if (row < 1) {
+    throw new Error('No participant found. Try the HAPPY ID, full name, phone number, or Ghana Card.');
+  }
+  const participant = rowToObject(headers, master.getRange(row, 1, 1, headers.length).getValues()[0]);
+  participant.continuationTokenHash = '';
+  return { status: 'OK', participant: participant };
+}
+
+function findParticipantRowsByName(sheet, headers, query) {
+  if (sheet.getLastRow() < 2) return [];
+  const rows   = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
+  const sIdx   = headers.indexOf('surname');
+  const fIdx   = headers.indexOf('firstName');
+  const qNorm  = String(query).toLowerCase().replace(/\s+/g, ' ').trim();
+  const matches = [];
+  for (var i = 0; i < rows.length; i++) {
+    const sn   = String(rows[i][sIdx] || '').toLowerCase().trim();
+    const fn   = String(rows[i][fIdx] || '').toLowerCase().trim();
+    if (!sn && !fn) continue;
+    const full1 = (sn + ' ' + fn).trim();   // Surname First
+    const full2 = (fn + ' ' + sn).trim();   // First Surname
+    const isMatch =
+      full1 === qNorm || full2 === qNorm ||
+      sn === qNorm    || fn === qNorm    ||
+      (qNorm.length >= 3 && (full1.includes(qNorm) || full2.includes(qNorm)));
+    if (isMatch) matches.push(i + 2);
+  }
+  return matches;
+}
+
 // ─── SAVE PARTICIPANT INFO ────────────────────────────────────────────────────
 function saveParticipantInfo(payload, explicitSection) {
   const accessMode = payload.accessMode || '';
@@ -213,6 +302,31 @@ function saveParticipantInfo(payload, explicitSection) {
   // Build the fields to write — scoped to the section being submitted
   const incoming = pickKnownFields(payload, headers);
   scopeToSection(incoming, explicitSection, accessMode, existing);
+
+  // Always preserve the existing HAMIS ID; generate a new unique one only for first-time submissions
+  if (existing.hamisId) {
+    incoming.hamisId = existing.hamisId;
+  } else if (!incoming.hamisId) {
+    incoming.hamisId = generateHamisId(
+      master, headers,
+      incoming.region || existing.region || '',
+      incoming.implementingPartner || existing.implementingPartner || ''
+    );
+  }
+
+  // Detect name mismatch between consent name and registration name
+  if (existing.consentName && (incoming.surname || incoming.firstName)) {
+    const normalize = s => String(s || '').toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const consentName    = normalize(existing.consentName);
+    const registeredName = normalize((incoming.surname || '') + ' ' + (incoming.firstName || ''));
+    const conWords = consentName.split(' ').filter(w => w.length > 2);
+    const regWords = registeredName.split(' ').filter(w => w.length > 2);
+    const hasOverlap = regWords.some(w => conWords.includes(w));
+    if (consentName && registeredName && !hasOverlap) {
+      const flag = 'NAME_MISMATCH: consent="' + existing.consentName + '" registered="' + (incoming.surname || '') + ' ' + (incoming.firstName || '') + '"';
+      incoming.adminNotes = incoming.adminNotes ? incoming.adminNotes + ' | ' + flag : flag;
+    }
+  }
 
   const capacityStatus  = resolveCapacityStatus(existing, incoming, explicitSection, accessMode);
   const placementStatus = resolvePlacementStatus(existing, incoming, explicitSection, accessMode);
@@ -335,100 +449,75 @@ function appendSubmissionMetadata(record) {
   ]);
 }
 
+// Maps UPPER_CASE sheet header → camelCase record field for each data tab.
+// Having an explicit map per sheet avoids collisions where the same header name
+// (e.g. SECTOR, JOB ROLE) means different record fields in different sheets.
+var PARTICIPANT_INFO_FIELD_MAP = {
+  'PARTICIPANT ID':'participantId', 'HAMIS ID':'hamisId',
+  'ONBOARDING DATE':'onboardingDate', 'IMPLEMENTING PARTNER':'implementingPartner',
+  'REGION':'region', 'DISTRICT':'district', 'COMMUNITY':'community',
+  'LOCATION STATUS':'locationStatus', 'SURNAME':'surname', 'FIRST NAME':'firstName',
+  'OTHER NAMES':'otherNames', 'SEX':'sex', 'DOB':'dob', 'AGE':'age',
+  'PARTICIPANT TYPE AGE':'participantTypeAge', 'TELEPHONE':'telephone',
+  'ID TYPE':'idType', 'GHANA CARD ID':'ghanaCardId', 'VOTER ID':'voterId',
+  'REFUGEE STATUS':'refugeeStatus', 'NATIONALITY':'nationality',
+  'DISPLACEMENT STATUS':'displacementStatus', 'DISPLACEMENT REASON':'displacementReason',
+  'ORIGINAL COMMUNITY':'originalCommunity', 'HOST COMMUNITY':'hostCommunity',
+  'DISABILITY STATUS':'disabilityStatus', 'DISABILITY SPECIFY':'disabilitySpecify',
+  'EDUCATION LEVEL':'educationLevel', 'EMPLOYMENT STATUS':'employmentStatus',
+  'CURRENT OCCUPATION':'currentOccupation', 'MONTHLY INCOME':'monthlyIncome',
+  'INCOME FREQUENCY':'incomeFrequency', 'SECTOR':'sector', 'INDUSTRY':'industry',
+  'JOB TYPE':'jobType', 'JOB ROLE':'jobRole',
+  'WORK REGION':'workRegion', 'WORK DISTRICT':'workDistrict', 'WORK COMMUNITY':'workCommunity'
+};
+
+var CAPACITY_BUILDING_FIELD_MAP = {
+  'PARTICIPANT ID':'participantId', 'SUBMISSION ID':'submissionId',
+  'TRAINED BY PARTNER':'trainedByPartner',
+  'TRAINING START DATE':'trainingStartDate', 'TRAINING END DATE':'trainingEndDate',
+  'TRAINING LOCATION':'trainingLocation', 'TRAINING MODE':'trainingMode',
+  'VIRTUAL PLATFORM':'virtualPlatform', 'TRAINER TYPE':'trainerType',
+  'TRAINING PARTNER':'trainingPartner', 'COMPLETION STATUS':'completionStatus',
+  'CERTIFICATE ISSUED':'certificateIssued', 'MODULES':'modules',
+  'DIGITAL SKILLS':'digitalSkills', 'WISH TRAINING':'wishTraining',
+  'PREVIOUS TRAININGS':'previousTrainings', 'PREVIOUS TRAINING DESC':'previousTrainingDesc'
+};
+
+var JOB_PLACEMENT_FIELD_MAP = {
+  'PARTICIPANT ID':'participantId', 'SUBMISSION ID':'submissionId', 'BATCH ID':'batchId',
+  'PLACED BY PARTNER':'placedByPartner', 'PLACEMENT START DATE':'placementStartDate',
+  'PLACEMENT REGION':'placementRegion', 'PLACEMENT DISTRICT':'placementDistrict',
+  'PLACEMENT COMMUNITY':'placementCommunity',
+  'SECTOR':'plSector', 'INDUSTRY':'plIndustry', 'JOB TYPE':'plJobType', 'JOB ROLE':'plJobRole',
+  'EMPLOYMENT TYPE':'employmentType', 'EMPLOYMENT CATEGORY':'employmentCategory',
+  'PLACEMENT INCOME':'placementIncome', 'PLACEMENT INCOME FREQ':'placementIncomeFreq',
+  'EMPLOYER NAME':'employerName', 'CONTRACT TYPE':'contractType', 'WORK HOURS':'workHours',
+  'CURRENTLY EMPLOYED':'currentlyEmployed', 'CURRENT EMPLOYER':'currentEmployer',
+  'CURRENT JOB ROLE':'currentJobRoleAlt', 'CURRENT INCOME':'currentIncomeAlt'
+};
+
+// Writes a row to a data tab using the actual header order in the sheet, not the
+// declared constants order. This prevents column-shift bugs when headers are added
+// or manually reordered after the sheet is first created.
+function appendMappedRow(sheetName, desiredHeaders, fieldMap, record) {
+  const sheet         = getOrCreateSheet(sheetName, desiredHeaders);
+  const actualHeaders = ensureHeaders(sheet, desiredHeaders);
+  sheet.appendRow(actualHeaders.map(function(h) {
+    var field = fieldMap[h];
+    return toSheetValue(field !== undefined ? (record[field] || '') : '');
+  }));
+}
+
 function appendParticipantInfo(record) {
-  const sheet = getOrCreateSheet(PARTICIPANT_INFO_SHEET_NAME, PARTICIPANT_INFO_HEADERS);
-  sheet.appendRow([
-    record.participantId      || '',
-    record.hamisId            || '',
-    record.onboardingDate     || '',
-    record.implementingPartner || '',
-    record.region             || '',
-    record.district           || '',
-    record.community          || '',
-    record.locationStatus     || '',
-    record.surname            || '',
-    record.firstName          || '',
-    record.otherNames         || '',
-    record.sex                || '',
-    record.dob                || '',
-    record.age                || '',
-    record.participantTypeAge || '',
-    record.telephone          || '',
-    record.idType             || '',
-    record.ghanaCardId        || '',
-    record.voterId            || '',
-    record.refugeeStatus      || '',
-    record.nationality        || '',
-    record.displacementStatus || '',
-    record.displacementReason || '',
-    record.originalCommunity  || '',
-    record.hostCommunity      || '',
-    record.disabilityStatus   || '',
-    record.disabilitySpecify  || '',
-    record.educationLevel     || '',
-    record.employmentStatus   || '',
-    record.currentOccupation  || '',
-    record.monthlyIncome      || '',
-    record.incomeFrequency    || '',
-    record.sector             || '',
-    record.industry           || '',
-    record.jobType            || '',
-    record.jobRole            || '',
-    record.workRegion         || '',
-    record.workDistrict       || '',
-    record.workCommunity      || ''
-  ]);
+  appendMappedRow(PARTICIPANT_INFO_SHEET_NAME, PARTICIPANT_INFO_HEADERS, PARTICIPANT_INFO_FIELD_MAP, record);
 }
 
 function appendCapacityBuilding(record) {
-  const sheet = getOrCreateSheet(CAPACITY_BUILDING_SHEET_NAME, CAPACITY_BUILDING_HEADERS);
-  sheet.appendRow([
-    record.participantId       || '',
-    record.submissionId        || '',
-    record.trainedByPartner    || '',
-    record.trainingStartDate   || '',
-    record.trainingEndDate     || '',
-    record.trainingLocation    || '',
-    record.trainingMode        || '',
-    record.virtualPlatform     || '',
-    record.trainerType         || '',
-    record.trainingPartner     || '',
-    record.completionStatus    || '',
-    record.certificateIssued   || '',
-    record.modules             || '',
-    record.digitalSkills       || '',
-    record.wishTraining        || '',
-    record.previousTrainings   || '',
-    record.previousTrainingDesc || ''
-  ]);
+  appendMappedRow(CAPACITY_BUILDING_SHEET_NAME, CAPACITY_BUILDING_HEADERS, CAPACITY_BUILDING_FIELD_MAP, record);
 }
 
 function appendJobPlacement(record) {
-  const sheet = getOrCreateSheet(JOB_PLACEMENT_SHEET_NAME, JOB_PLACEMENT_HEADERS);
-  sheet.appendRow([
-    record.participantId      || '',
-    record.submissionId       || '',
-    record.placedByPartner    || '',
-    record.placementStartDate || '',
-    record.placementRegion    || '',
-    record.placementDistrict  || '',
-    record.placementCommunity || '',
-    record.plSector           || '',
-    record.plIndustry         || '',
-    record.plJobType          || '',
-    record.plJobRole          || '',
-    record.employmentType     || '',
-    record.employmentCategory || '',
-    record.placementIncome    || '',
-    record.placementIncomeFreq || '',
-    record.employerName       || '',
-    record.contractType       || '',
-    record.workHours          || '',
-    record.currentlyEmployed  || '',
-    record.currentEmployer    || '',
-    record.currentJobRoleAlt  || '',
-    record.currentIncomeAlt   || ''
-  ]);
+  appendMappedRow(JOB_PLACEMENT_SHEET_NAME, JOB_PLACEMENT_HEADERS, JOB_PLACEMENT_FIELD_MAP, record);
 }
 
 // ─── CV STATUS ───────────────────────────────────────────────────────────────
@@ -836,6 +925,247 @@ function sanitizeFileName(value) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120) || 'file';
+}
+
+// ─── BATCH PLACEMENT ─────────────────────────────────────────────────────────
+function generateBatchId() {
+  const ss    = SpreadsheetApp.openById(KOLLECT_SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(PLACEMENT_BATCHES_SHEET_NAME);
+  let max = 0;
+  if (sheet && sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat().forEach(function(id) {
+      const m = String(id || '').match(/^BATCH-\d{4}-(\d+)$/);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+  }
+  return 'BATCH-2026-' + String(max + 1).padStart(6, '0');
+}
+
+function getEligibleForPlacement(password) {
+  const pwd = getAdminPassword();
+  if (!pwd || password !== pwd) throw new Error('Admin access required.');
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const records = getRecords(master, headers);
+  const eligible = records
+    .filter(function(r) {
+      return r.capacityBuildingStatus === 'submitted' && r.jobPlacementStatus === 'not_started';
+    })
+    .map(function(r) {
+      return {
+        participantId:   r.participantId   || '',
+        surname:         r.surname         || '',
+        firstName:       r.firstName       || '',
+        sex:             r.sex             || '',
+        age:             r.age             || '',
+        region:          r.region          || '',
+        district:        r.district        || '',
+        telephone:       r.telephone       || '',
+        modules:         r.modules         || ''
+      };
+    });
+  return { status: 'OK', eligible: eligible, count: eligible.length };
+}
+
+function submitPlacementBatch(payload) {
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+
+  const participantIds = payload.participantIds || [];
+  if (!participantIds.length) throw new Error('No participants selected.');
+  if (!payload.employerName) throw new Error('Employer name is required.');
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const now     = new Date().toISOString();
+  const batchId = generateBatchId();
+  const actor   = payload.collectorName || payload.actor || 'admin';
+
+  // Write one row to Placement Batches sheet
+  const batchSheet   = getOrCreateSheet(PLACEMENT_BATCHES_SHEET_NAME, PLACEMENT_BATCHES_HEADERS);
+  const batchHeaders = ensureHeaders(batchSheet, PLACEMENT_BATCHES_HEADERS);
+  const batchValues  = {
+    'BATCH ID':              batchId,
+    'EMPLOYER NAME':         payload.employerName        || '',
+    'SECTOR':                payload.plSector            || '',
+    'INDUSTRY':              payload.plIndustry          || '',
+    'JOB TYPE':              payload.plJobType           || '',
+    'JOB ROLE':              payload.plJobRole           || '',
+    'EMPLOYMENT TYPE':       payload.employmentType      || '',
+    'EMPLOYMENT CATEGORY':   payload.employmentCategory  || '',
+    'CONTRACT TYPE':         payload.contractType        || '',
+    'WORK HOURS':            payload.workHours           || '',
+    'PLACEMENT INCOME':      payload.placementIncome     || '',
+    'PLACEMENT INCOME FREQ': payload.placementIncomeFreq || '',
+    'PLACEMENT START DATE':  payload.placementStartDate  || '',
+    'PLACEMENT REGION':      payload.placementRegion     || '',
+    'PLACEMENT DISTRICT':    payload.placementDistrict   || '',
+    'PLACEMENT COMMUNITY':   payload.placementCommunity  || '',
+    'PLACED BY PARTNER':     payload.placedByPartner     || '',
+    'PARTICIPANT COUNT':     participantIds.length,
+    'CREATED AT':            now,
+    'CREATED BY':            actor
+  };
+  batchSheet.appendRow(batchHeaders.map(function(h) {
+    return toSheetValue(batchValues[h] !== undefined ? batchValues[h] : '');
+  }));
+
+  // Place each selected participant
+  var placed = [], failed = [];
+  participantIds.forEach(function(pid) {
+    try {
+      const row = findParticipantRow(master, headers, { participantId: pid });
+      if (row < 1) throw new Error('Participant not found');
+      const existing = rowToObject(headers, master.getRange(row, 1, 1, headers.length).getValues()[0]);
+      if (existing.jobPlacementStatus === 'submitted') throw new Error('Already placed');
+
+      // Write to Job Placement sheet
+      const placementRecord = Object.assign({}, existing, {
+        batchId:             batchId,
+        submissionId:        '',
+        placedByPartner:     payload.placedByPartner    || '',
+        placementStartDate:  payload.placementStartDate || '',
+        placementRegion:     payload.placementRegion    || '',
+        placementDistrict:   payload.placementDistrict  || '',
+        placementCommunity:  payload.placementCommunity || '',
+        plSector:            payload.plSector           || '',
+        plIndustry:          payload.plIndustry         || '',
+        plJobType:           payload.plJobType          || '',
+        plJobRole:           payload.plJobRole          || '',
+        employmentType:      payload.employmentType     || '',
+        employmentCategory:  payload.employmentCategory || '',
+        placementIncome:     payload.placementIncome    || '',
+        placementIncomeFreq: payload.placementIncomeFreq || '',
+        employerName:        payload.employerName       || '',
+        contractType:        payload.contractType       || '',
+        workHours:           payload.workHours          || ''
+      });
+      appendJobPlacement(placementRecord);
+
+      // Update Master record — write all placement fields so dashboard/report reads are correct
+      updateRow(master, headers, row, {
+        jobPlacementStatus:  'submitted',
+        currentStage:        'placement_complete',
+        batchId:             batchId,
+        employerName:        payload.employerName        || '',
+        placedByPartner:     payload.placedByPartner     || '',
+        placementStartDate:  payload.placementStartDate  || '',
+        placementRegion:     payload.placementRegion     || '',
+        placementDistrict:   payload.placementDistrict   || '',
+        placementCommunity:  payload.placementCommunity  || '',
+        plSector:            payload.plSector            || '',
+        plIndustry:          payload.plIndustry          || '',
+        plJobType:           payload.plJobType           || '',
+        plJobRole:           payload.plJobRole           || '',
+        employmentType:      payload.employmentType      || '',
+        employmentCategory:  payload.employmentCategory  || '',
+        placementIncome:     payload.placementIncome     || '',
+        placementIncomeFreq: payload.placementIncomeFreq || '',
+        contractType:        payload.contractType        || '',
+        workHours:           payload.workHours           || '',
+        lastUpdatedAt:       now,
+        lastUpdatedBy:       actor
+      });
+
+      appendAudit({
+        participantId: pid,
+        actorType:     'staff',
+        actor:         actor,
+        action:        'jobPlacement',
+        section:       'placement',
+        notes:         'Batch: ' + batchId + ' | Employer: ' + (payload.employerName || '')
+      });
+
+      placed.push(pid);
+    } catch (err) {
+      failed.push({ participantId: pid, error: err.message });
+    }
+  });
+
+  return {
+    status:  'OK',
+    batchId: batchId,
+    placed:  placed.length,
+    failed:  failed,
+    message: placed.length + ' participant(s) placed in batch ' + batchId + '.'
+  };
+}
+
+// ─── HAMIS ID GENERATION (server-side, unique) ────────────────────────────────
+const PARTNER_CODE_MAP = { 'Jobberman':'JOB', 'Agrico':'AGR', 'YouthEmpower':'YOU', 'SkillsGH':'SKI' };
+const REGION_CODE_MAP  = {
+  'Greater Accra':'GRE', 'Ashanti':'ASH', 'Central':'CEN',
+  'Eastern':'EAS', 'Western':'WES', 'Northern':'NOR',
+  'Upper East':'UPE', 'Upper West':'UPW', 'Volta':'VOL',
+  'Bono':'BON', 'Bono East':'BOE', 'Ahafo':'AHA',
+  'Savannah':'SAV', 'North East':'NOE', 'Oti':'OTI', 'Western North':'WEN'
+};
+
+function generateHamisId(sheet, headers, region, partner) {
+  const partnerCode = PARTNER_CODE_MAP[partner] || String(partner || '').substring(0, 3).toUpperCase() || 'UNK';
+  const regionCode  = REGION_CODE_MAP[region]  || String(region  || '').substring(0, 3).toUpperCase() || 'UNK';
+  const prefix = 'HAMIS-' + partnerCode + '-' + regionCode + '-';
+  const col = headers.indexOf('hamisId');
+  let max = 0;
+  if (col >= 0 && sheet.getLastRow() >= 2) {
+    sheet.getRange(2, col + 1, sheet.getLastRow() - 1, 1).getValues().flat().forEach(function(id) {
+      const s = String(id || '');
+      if (s.startsWith(prefix)) {
+        const n = parseInt(s.slice(prefix.length), 10);
+        if (!isNaN(n)) max = Math.max(max, n);
+      }
+    });
+  }
+  return prefix + String(max + 1).padStart(6, '0');
+}
+
+// ─── NAME MISMATCH REPORT (one-time admin tool) ───────────────────────────────
+function generateNameMismatchReport(password) {
+  const pwd = getAdminPassword();
+  if (!pwd || password !== pwd) throw new Error('Admin access required.');
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const records = getRecords(master, headers);
+
+  const ss          = SpreadsheetApp.openById(KOLLECT_SPREADSHEET_ID);
+  let reviewSheet   = ss.getSheetByName('Name Mismatch Review');
+  if (!reviewSheet) reviewSheet = ss.insertSheet('Name Mismatch Review');
+  reviewSheet.clear();
+
+  const reviewHeaders = ['PARTICIPANT ID', 'CONSENT NAME', 'REGISTERED NAME', 'MISMATCH TYPE', 'STATUS', 'ADMIN NOTES'];
+  reviewSheet.getRange(1, 1, 1, reviewHeaders.length).setValues([reviewHeaders]);
+  reviewSheet.setFrozenRows(1);
+
+  const normalize = function(s) {
+    return String(s || '').toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+
+  const rows = [];
+  records.forEach(function(rec) {
+    const consentNorm   = normalize(rec.consentName);
+    const registeredNorm = normalize((rec.surname || '') + ' ' + (rec.firstName || ''));
+    if (!consentNorm || !registeredNorm) return;
+    const conWords = consentNorm.split(' ').filter(function(w) { return w.length > 2; });
+    const regWords = registeredNorm.split(' ').filter(function(w) { return w.length > 2; });
+    const hasOverlap = regWords.some(function(w) { return conWords.indexOf(w) >= 0; });
+    if (!hasOverlap) {
+      rows.push([
+        rec.participantId || '',
+        rec.consentName   || '',
+        ((rec.surname || '') + ' ' + (rec.firstName || '')).trim(),
+        'No name overlap',
+        'PENDING',
+        rec.adminNotes || ''
+      ]);
+    }
+  });
+
+  if (rows.length) {
+    reviewSheet.getRange(2, 1, rows.length, reviewHeaders.length).setValues(rows);
+  }
+  reviewSheet.autoResizeColumns(1, reviewHeaders.length);
+  return { status: 'OK', mismatches: rows.length, message: rows.length + ' mismatch(es) written to "Name Mismatch Review" sheet.' };
 }
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────

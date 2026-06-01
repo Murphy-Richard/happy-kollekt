@@ -60,7 +60,8 @@ let formState = {
   currentView: 'form',
   isSheetLoading: false,
   pendingAdminView: null,
-  accessMode: null // 'token' | 'capacity-existing' | 'capacity-new' | 'admin'
+  accessMode: null, // 'token' | 'capacity-existing' | 'capacity-new' | 'admin'
+  consentName: ''   // stored when participant is loaded, used for name mismatch check
 };
 
 let db = JSON.parse(localStorage.getItem(CONFIG.LOCAL_DB_KEY)) || [];
@@ -190,6 +191,7 @@ async function submitCapacityConsent() {
     const token = result.token;
     formState.token = token;
     formState.accessMode = 'capacity-new';
+    formState.consentName = name;
     document.getElementById('capacityConsentScreen').classList.add('hidden');
     initializeForm();
     document.getElementById('surname').value   = name.trim().split(/\s+/)[0] || '';
@@ -231,6 +233,7 @@ async function lookupAndContinue() {
     if (!result || !result.participant?.participantId) throw new Error('Participant not found.');
     document.getElementById('capacityEntryScreen').classList.add('hidden');
     formState.accessMode = 'capacity-existing';
+    formState.consentName = result.participant.consentName || '';
     initializeForm();
     prefillParticipantInfo(result.participant);
     lockSectionB();
@@ -248,6 +251,7 @@ async function unlockWithToken(token) {
     if (!result || !result.participant?.participantId) throw new Error('Invalid or expired link.');
     formState.accessMode = 'token';
     formState.token = token;
+    formState.consentName = result.participant.consentName || '';
     initializeForm();
     prefillParticipantInfo(result.participant);
     showSections({ A: true, B: true, C: false, D: false });
@@ -312,10 +316,207 @@ function setupEventListeners() {
   }, true);
 }
 
+// ===== ADMIN STAGE SELECTION (Entry tab) =====
+function showAdminStageScreen() {
+  ['lockedScreen','capacityConsentScreen','capacityEntryScreen',
+   'placementLookupScreen','registrationLookupScreen','view-form'].forEach(id => {
+    document.getElementById(id)?.classList.add('hidden');
+  });
+  document.getElementById('adminStageScreen')?.classList.remove('hidden');
+}
+
+function adminSelectStage(stage) {
+  document.getElementById('adminStageScreen')?.classList.add('hidden');
+
+  if (stage === 'registration') {
+    // Fresh form — admin registers a brand-new participant
+    formState.accessMode = 'admin';
+    formState.consentName = '';
+    initializeForm();
+    showSections({ A: true, B: true, C: true, D: true });
+    document.getElementById('view-form').classList.remove('hidden');
+    showToast('New participant entry — fill in all sections.', 'info');
+
+  } else if (stage === 'capacity') {
+    showCapacityEntryScreen();
+
+  } else if (stage === 'placement') {
+    document.getElementById('placementLookupScreen')?.classList.remove('hidden');
+    document.getElementById('placementLookupError')?.classList.add('hidden');
+    const inp = document.getElementById('placementLookupId');
+    if (inp) { inp.value = ''; inp.focus(); }
+
+  } else if (stage === 'update-registration') {
+    document.getElementById('registrationLookupScreen')?.classList.remove('hidden');
+    document.getElementById('regLookupError')?.classList.add('hidden');
+    const inp = document.getElementById('regLookupInput');
+    if (inp) { inp.value = ''; inp.focus(); }
+  }
+}
+
+// Look up a participant by ID or phone to continue/correct their registration
+async function loadParticipantForRegistration() {
+  const raw   = (document.getElementById('regLookupInput')?.value || '').trim();
+  const errEl = document.getElementById('regLookupError');
+  const btn   = document.getElementById('regLookupBtn');
+  errEl.classList.add('hidden');
+  if (!raw) {
+    errEl.textContent = 'Enter a Participant ID or phone number.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+
+  try {
+    // Single flexible action — backend tries ID, phone, Ghana Card, then name
+    const result = await apiAction('getParticipantByLookup', { query: raw });
+
+    // Multiple name matches — show a pick list instead of loading directly
+    if (result.status === 'MULTIPLE') {
+      renderNameMatchList(result.participants);
+      btn.disabled = false;
+      btn.textContent = 'Load Participant';
+      return;
+    }
+
+    if (!result?.participant?.participantId) throw new Error('No participant found.');
+
+    const p = result.participant;
+
+    // Show a status summary before opening the form
+    const stage = p.currentStage || 'unknown';
+    const statusMsg = {
+      'registration':          'Consent taken — registration not yet started.',
+      'registration_complete': 'Registration submitted — you can update it.',
+      'capacity_complete':     'Training complete — registration can still be corrected.',
+      'placement_complete':    'Participant is fully placed — be careful editing registration data.'
+    }[stage] || `Stage: ${stage}`;
+    showToast(statusMsg, stage === 'placement_complete' ? 'error' : 'info');
+
+    // Open the registration form pre-filled with existing data
+    document.getElementById('registrationLookupScreen').classList.add('hidden');
+    formState.accessMode  = 'admin';
+    formState.consentName = p.consentName || '';
+
+    initializeForm();
+    prefillParticipantInfo(p);
+
+    // Registration update — show A + B only; C and D are separate stages
+    showSections({ A: true, B: true, C: false, D: false });
+    document.getElementById('view-form').classList.remove('hidden');
+
+    // Show a prominent notice about which participant is being edited
+    showRegistrationUpdateBanner(p);
+
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Load Participant';
+  }
+}
+
+function renderNameMatchList(participants) {
+  const listEl = document.getElementById('regNameMatchList');
+  const errEl  = document.getElementById('regLookupError');
+  if (!listEl) return;
+  errEl.classList.add('hidden');
+  listEl.innerHTML = `
+    <div style="padding:0.6rem 0.75rem;background:#fffbeb;border-bottom:1px solid #fde68a;">
+      <strong style="font-size:0.78rem;color:#92400e;">${participants.length} participants found</strong>
+      <span style="font-size:0.72rem;color:#92400e;"> — select one to continue</span>
+    </div>
+    ${participants.map(p => `
+      <button type="button" onclick="selectNameMatch('${escapeHtml(p.participantId)}')"
+        style="display:flex;align-items:center;gap:0.75rem;width:100%;padding:0.6rem 0.75rem;border:none;border-bottom:1px solid #fef3c7;background:#fff;cursor:pointer;text-align:left;"
+        onmouseover="this.style.background='#fffbeb'" onmouseout="this.style.background='#fff'">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:0.8rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</div>
+          <div style="font-size:0.67rem;color:#64748b;font-family:monospace;">${escapeHtml(p.participantId)}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:0.67rem;color:#64748b;">${escapeHtml(p.region || '')}</div>
+          <div style="font-size:0.65rem;color:#94a3b8;">${escapeHtml(p.currentStage || '')}</div>
+        </div>
+      </button>`).join('')}`;
+  listEl.classList.remove('hidden');
+}
+
+async function selectNameMatch(participantId) {
+  // Hide the pick list and populate the input with the chosen ID, then re-trigger lookup
+  document.getElementById('regNameMatchList')?.classList.add('hidden');
+  const inp = document.getElementById('regLookupInput');
+  if (inp) inp.value = participantId;
+  await loadParticipantForRegistration();
+}
+
+function showRegistrationUpdateBanner(p) {
+  // Remove any existing banner first
+  document.getElementById('regUpdateBanner')?.remove();
+  const banner = document.createElement('div');
+  banner.id = 'regUpdateBanner';
+  banner.style.cssText = 'background:#fffbeb;border:1.5px solid #f59e0b;border-radius:0.5rem;padding:0.65rem 1rem;margin-bottom:1rem;font-size:0.78rem;color:#92400e;line-height:1.5;display:flex;justify-content:space-between;align-items:center;';
+  banner.innerHTML = `
+    <span>
+      <strong>Updating registration:</strong> ${escapeHtml(p.participantId)}
+      &bull; Consent name: <em>"${escapeHtml(p.consentName || 'not recorded')}"</em>
+      &bull; Stage: <strong>${escapeHtml(p.currentStage || 'unknown')}</strong>
+    </span>
+    <button type="button" onclick="document.getElementById('regUpdateBanner')?.remove()"
+      style="font-size:0.7rem;color:#92400e;background:none;border:none;cursor:pointer;margin-left:0.75rem;padding:0;">&times;</button>`;
+  const form = document.getElementById('mainForm');
+  if (form) form.insertAdjacentElement('beforebegin', banner);
+}
+
+async function loadParticipantForPlacement() {
+  const pid   = document.getElementById('placementLookupId').value.trim().toUpperCase();
+  const errEl = document.getElementById('placementLookupError');
+  errEl.classList.add('hidden');
+  if (!pid) {
+    errEl.textContent = 'Please enter a Participant ID.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const btn = document.querySelector('#placementLookupScreen button[onclick="loadParticipantForPlacement()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  try {
+    const result = await apiAction('getParticipantById', { participantId: pid });
+    if (!result?.participant?.participantId) throw new Error('Participant not found.');
+    const p = result.participant;
+    if (p.capacityBuildingStatus !== 'submitted') {
+      throw new Error('This participant has not yet completed capacity building. Placement requires training to be recorded first.');
+    }
+    if (p.jobPlacementStatus === 'submitted') {
+      throw new Error('This participant has already been placed (jobPlacementStatus = submitted).');
+    }
+    document.getElementById('placementLookupScreen').classList.add('hidden');
+    formState.accessMode = 'admin';
+    formState.consentName = p.consentName || '';
+    initializeForm();
+    prefillParticipantInfo(p);
+    lockSectionB();
+    // Show only participant info (read-only) + placement section
+    showSections({ A: true, B: true, C: false, D: true });
+    document.getElementById('view-form').classList.remove('hidden');
+    // Pre-tick "placed by partner" to open placement fields
+    document.querySelectorAll('input[name="pl_check"]').forEach(r => { r.checked = r.value === 'Yes'; });
+    togglePlacementFields(true);
+    showToast('Record loaded. Complete Section D and submit.', 'success');
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Load Participant'; }
+  }
+}
+
 // ===== VIEW SWITCHING =====
 function setView(view) {
   formState.currentView = view;
-  ['form', 'sheet', 'dashboard', 'report'].forEach(v => {
+  ['form', 'sheet', 'dashboard', 'report', 'batch'].forEach(v => {
     document.getElementById('view-' + v).classList.toggle('hidden', view !== v);
     const tab = document.getElementById('tab-' + v);
     if (tab) tab.classList.toggle('active', view === v);
@@ -333,6 +534,7 @@ function openAdminView(targetView) {
     if (targetView === 'dashboard') loadDashboard();
     else if (targetView === 'report') loadReport();
     else if (targetView === 'sheet') loadSheetData();
+    else if (targetView === 'batch') loadBatchPlacement();
     return;
   }
   formState.pendingAdminView = targetView;
@@ -354,16 +556,17 @@ async function verifyAdmin() {
     formState.masterSheetData = data;
     closeAdminLogin();
     showToast('Admin access granted', 'success');
-    // Always initialize admin entry form if coming from locked screen
+    // Coming from locked screen → show stage selection instead of jumping into the form
     if (!document.getElementById('lockedScreen').classList.contains('hidden')) {
-      initializeForm();
-      showSections({ A: true, B: true, C: true, D: true });
       document.getElementById('lockedScreen').classList.add('hidden');
+      showAdminStageScreen();
+      return; // stage selection will handle the rest
     }
     const targetView = formState.pendingAdminView || 'sheet';
     formState.pendingAdminView = null;
-    if (targetView === 'dashboard') { setView('dashboard'); renderDashboard(data); }
+    if (targetView === 'dashboard') { setView('dashboard'); populateDashboardFilters(data); applyDashboardFilters(); }
     else if (targetView === 'report') { setView('report'); renderReport(data); }
+    else if (targetView === 'batch') { setView('batch'); loadBatchPlacement(); }
     else { renderSheet(data); setView('sheet'); }
   } catch (err) {
     showToast(`Access denied: ${err.message}`, 'error');
@@ -583,12 +786,29 @@ function handleIdTypeChange() {
 
 // ===== CALCULATIONS =====
 function calculateAge() {
-  const dob = document.getElementById('dob').value;
+  const dobInput = document.getElementById('dob');
+  const dob = dobInput.value;
   if (!dob) { document.getElementById('age').value = ''; document.getElementById('participantTypeAge').value = ''; return; }
   const birth = new Date(dob), today = new Date();
   let age = today.getFullYear() - birth.getFullYear();
   const m = today.getMonth() - birth.getMonth();
   if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+  if (birth > today || age < 0) {
+    showToast('Date of birth cannot be in the future.', 'error');
+    dobInput.value = '';
+    document.getElementById('age').value = '';
+    document.getElementById('participantTypeAge').value = '';
+    dobInput.focus();
+    return;
+  }
+  if (age < 10) {
+    showToast('Check the date of birth — participant appears to be under 10 years old.', 'error');
+    dobInput.value = '';
+    document.getElementById('age').value = '';
+    document.getElementById('participantTypeAge').value = '';
+    dobInput.focus();
+    return;
+  }
   document.getElementById('age').value = age;
   document.getElementById('participantTypeAge').value = (age >= 15 && age <= 35) ? 'Youth' : 'Non-Youth';
 }
@@ -602,14 +822,19 @@ function updatePartnerDisplays() {
 }
 function updateIds() {
   const partner = document.getElementById('implementingPartner').value || 'UNK';
-  const region = document.getElementById('region').value || 'XXX';
+  const region  = document.getElementById('region').value;
   const pPrefix = CONFIG.PARTNER_PREFIXES[partner] || partner.substring(0,3).toUpperCase();
-  const rPrefix = region.substring(0,3).toUpperCase();
-  const ts = new Date().toISOString().replace(/[-:T.]/g,'').substring(0,14);
+  const rPrefix = region ? region.substring(0,3).toUpperCase() : null;
+  const ts  = new Date().toISOString().replace(/[-:T.]/g,'').substring(0,14);
   const seq = getNextLocalSequence();
-  document.getElementById('submissionId').value = `${rPrefix}-${String(seq).padStart(6,'0')}-${ts}`;
-  document.getElementById('subIdDisplay').textContent = `${rPrefix}-${String(seq).padStart(6,'0')}-${ts}`;
-  document.getElementById('hamisId').value = `HAMIS-${pPrefix}-${rPrefix}-${String(seq).padStart(6,'0')}`;
+  const subId = rPrefix
+    ? `${rPrefix}-${String(seq).padStart(6,'0')}-${ts}`
+    : '(select region first)';
+  document.getElementById('submissionId').value      = subId;
+  document.getElementById('subIdDisplay').textContent = subId;
+  // HAMIS ID is assigned server-side to ensure global uniqueness — do not generate client-side
+  const hamisEl = document.getElementById('hamisId');
+  if (hamisEl && !hamisEl.value) hamisEl.placeholder = 'Auto-assigned by server';
   document.getElementById('participantId').placeholder = `${pPrefix}--${String(seq).padStart(7,'0')} (will auto-generate)`;
 }
 function generateDeviceId() {
@@ -717,6 +942,17 @@ async function syncPendingSubmissions() {
   updateOnlineStatus();
 }
 
+// ===== NAME MISMATCH CHECK =====
+function namesMatch(consentName, surname, firstName) {
+  const normalize = s => String(s || '').toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const registered = normalize(`${surname} ${firstName}`);
+  const consented  = normalize(consentName);
+  if (!registered.replace(/\s/g, '') || !consented) return true;
+  const regWords = registered.split(' ').filter(w => w.length > 2);
+  const conWords = consented.split(' ').filter(w => w.length > 2);
+  return regWords.some(w => conWords.includes(w));
+}
+
 // ===== FORM SUBMISSION =====
 async function handleSubmit(e) {
   e.preventDefault();
@@ -724,6 +960,22 @@ async function handleSubmit(e) {
   if (!validateVisibleRequiredFields()) return;
   if (!validatePhone(document.getElementById('telephone'))) return;
   if (document.getElementById('idType').value === 'Ghana Card' && !validateGhanaCard(document.getElementById('ghanaCardId'))) return;
+
+  // Name alignment check — warn if registered name doesn't share any words with consent name
+  if (formState.consentName && formState.accessMode !== 'admin') {
+    const surname    = document.getElementById('surname').value.trim();
+    const firstName  = document.getElementById('firstName').value.trim();
+    if (!namesMatch(formState.consentName, surname, firstName)) {
+      const proceed = confirm(
+        `⚠ Name mismatch detected\n\n` +
+        `Consent name:    "${formState.consentName}"\n` +
+        `Registered name: "${firstName} ${surname}"\n\n` +
+        `These names do not appear to match. Is this the same person?\n\n` +
+        `Press OK to submit anyway, or Cancel to go back and check.`
+      );
+      if (!proceed) return;
+    }
+  }
 
   formState.isSubmitting = true;
   const btn = document.getElementById('submitBtn');
@@ -804,7 +1056,7 @@ function collectFormData() {
     collectorName: document.getElementById('collectorName').value,
     deviceId: formState.deviceId,
     submissionTimestamp: new Date().toISOString(),
-    hamisId: document.getElementById('hamisId').value,
+    // hamisId omitted — assigned server-side for global uniqueness
     onboardingDate: document.getElementById('onboardingDate').value,
     implementingPartner: document.getElementById('implementingPartner').value,
     region: document.getElementById('region').value,
@@ -899,6 +1151,12 @@ function handleSubmitAnother() {
     formState.token = null;
     formState.accessMode = null;
     showCapacityEntryScreen();
+  } else if (formState.accessMode === 'admin' && formState.isAdmin) {
+    // Admin goes back to stage selection after each submission
+    document.getElementById('successScreen').classList.remove('show');
+    document.getElementById('view-form').classList.add('hidden');
+    formState.consentName = '';
+    showAdminStageScreen();
   } else {
     resetForm();
   }
@@ -1008,6 +1266,59 @@ function renderSheet(data) {
   });
 }
 
+// ===== SHARED FILTER UTILITIES =====
+function applyFilters(data, f) {
+  return data.filter(r => {
+    const d = r.onboardingDate ||
+      (r.consentSubmittedAt ? String(r.consentSubmittedAt).slice(0, 10) : '');
+    if (f.startDate  && d && d < f.startDate)                                    return false;
+    if (f.endDate    && d && d > f.endDate)                                      return false;
+    if (f.partner    && r.implementingPartner !== f.partner)                     return false;
+    if (f.region     && r.region !== f.region)                                   return false;
+    if (f.sex        && r.sex !== f.sex)                                         return false;
+    if (f.collector  && r.collectorName !== f.collector)                         return false;
+    if (f.status === 'registered'  && r.participantInfoStatus !== 'submitted')   return false;
+    if (f.status === 'capacity'    && r.capacityBuildingStatus !== 'submitted')  return false;
+    if (f.status === 'placement'   && r.jobPlacementStatus !== 'submitted')      return false;
+    return true;
+  });
+}
+
+// ===== DASHBOARD FILTERS =====
+function populateDashboardFilters(data) {
+  const partners   = [...new Set(data.map(r => r.implementingPartner).filter(Boolean))].sort();
+  const collectors = [...new Set(data.map(r => r.collectorName).filter(Boolean))].sort();
+  ['dashFilterPartner', 'dashFilterCollector'].forEach((id, idx) => {
+    const sel  = document.getElementById(id);
+    if (!sel) return;
+    const cur  = sel.value;
+    const list = idx === 0 ? partners : collectors;
+    const label = idx === 0 ? 'All Partners' : 'All Collectors';
+    sel.innerHTML = `<option value="">${label}</option>` +
+      list.map(v => `<option value="${escapeHtml(v)}"${v === cur ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+  });
+  const fEl = document.getElementById('dashboardFilters');
+  if (fEl) fEl.style.display = 'flex';
+}
+
+function applyDashboardFilters() {
+  const data     = formState.masterSheetData || [];
+  const filtered = applyFilters(data, {
+    startDate:  document.getElementById('dashFilterStart')?.value    || '',
+    endDate:    document.getElementById('dashFilterEnd')?.value      || '',
+    partner:    document.getElementById('dashFilterPartner')?.value  || '',
+    collector:  document.getElementById('dashFilterCollector')?.value || '',
+    region: '', sex: '', status: ''
+  });
+  renderDashboard(filtered);
+}
+
+function clearDashboardFilters() {
+  ['dashFilterStart','dashFilterEnd','dashFilterPartner','dashFilterCollector']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  applyDashboardFilters();
+}
+
 // ===== ADMIN DATA REFRESH =====
 async function refreshAdminData(view) {
   if (!formState.isAdmin) return;
@@ -1015,9 +1326,9 @@ async function refreshAdminData(view) {
     showToast('Refreshing data...', 'info');
     const data = await fetchProtectedSheetData(formState.adminPassword);
     formState.masterSheetData = data;
-    if (view === 'sheet') renderSheet(data);
-    else if (view === 'dashboard') renderDashboard(data);
-    else if (view === 'report') renderReport(data);
+    if (view === 'sheet')     renderSheet(data);
+    else if (view === 'dashboard') { populateDashboardFilters(data); applyDashboardFilters(); }
+    else if (view === 'report')    renderReport(data);
     showToast('Data refreshed.', 'success');
   } catch (err) {
     showToast('Refresh failed: ' + err.message, 'error');
@@ -1031,33 +1342,49 @@ function loadDashboard() {
     document.getElementById('dashboardContent').innerHTML = '<p style="text-align:center;color:#94a3b8;padding:2.5rem 1rem;font-size:0.85rem;">No data loaded — click Refresh to fetch from Google Sheets.</p>';
     return;
   }
-  renderDashboard(data);
+  populateDashboardFilters(data);
+  applyDashboardFilters();
 }
 
+// ===== DASHBOARD (6-section MERL layout) =====================================
 function renderDashboard(data) {
-  document.getElementById('dashboardTimestamp').textContent = 'Data as of ' + new Date().toLocaleString();
+  const totalInSheet = (formState.masterSheetData || []).length;
+  const filterNote   = data.length < totalInSheet ? ` — ${data.length} of ${totalInSheet} (filtered)` : '';
+  document.getElementById('dashboardTimestamp').textContent =
+    'Data as of ' + new Date().toLocaleString() + filterNote;
+
   const total = data.length;
   if (!total) {
-    document.getElementById('dashboardContent').innerHTML = '<p style="text-align:center;color:#94a3b8;padding:2rem;">No participants found.</p>';
+    document.getElementById('dashboardContent').innerHTML =
+      '<p style="text-align:center;color:#94a3b8;padding:2rem;">No participants found.</p>';
     return;
   }
 
-  const female    = data.filter(r => r.sex === 'Female').length;
-  const male      = data.filter(r => r.sex === 'Male').length;
-  const youth     = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
-  const pwd       = data.filter(r => r.disabilityStatus === 'Yes').length;
-  const refugee   = data.filter(r => r.refugeeStatus === 'Yes').length;
-  const displaced = data.filter(r => r.displacementStatus === 'Yes').length;
-  const trained   = data.filter(r => r.capacityBuildingStatus === 'submitted').length;
-  const placed    = data.filter(r => r.jobPlacementStatus === 'submitted').length;
+  const female     = data.filter(r => r.sex === 'Female').length;
+  const male       = data.filter(r => r.sex === 'Male').length;
+  const youth      = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
+  const pwd        = data.filter(r => r.disabilityStatus === 'Yes').length;
+  const refugee    = data.filter(r => r.refugeeStatus === 'Yes').length;
+  const displaced  = data.filter(r => r.displacementStatus === 'Yes').length;
+  const registered = data.filter(r => r.participantInfoStatus === 'submitted').length;
+  const trained    = data.filter(r => r.capacityBuildingStatus === 'submitted').length;
+  const placed     = data.filter(r => r.jobPlacementStatus === 'submitted').length;
+  const cvUploaded = data.filter(r => r.cvStatus === 'cv_uploaded').length;
+  const noCv       = data.filter(r => r.cvStatus === 'no_cv').length;
 
-  const byPartner    = groupCount(data, 'implementingPartner');
-  const byRegion     = groupCount(data, 'region');
-  const byEmployment = groupCount(data, 'employmentStatus');
-  const byEducation  = groupCount(data, 'educationLevel');
+  document.getElementById('dashboardContent').innerHTML =
+    dashSection1_Snapshot(total, registered, trained, placed, female, male, youth, pwd, refugee, displaced, cvUploaded, noCv) +
+    dashSection2_Trend(data) +
+    dashSection3_Partners(data) +
+    dashSection4_Inclusion(total, female, youth, pwd, refugee, displaced) +
+    dashSection5_Charts(data, placed) +
+    dashSection6_Quality(data);
+}
 
-  document.getElementById('dashboardContent').innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:0.6rem;margin-bottom:1.5rem;">
+// ── 1. KPI cards + conversion funnel with dropout rates ──────────────────────
+function dashSection1_Snapshot(total, registered, trained, placed, female, male, youth, pwd, refugee, displaced, cvUploaded, noCv) {
+  const cards = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:0.6rem;margin-bottom:1.25rem;">
       ${statCard(total,    'Total',       '#5B45E8')}
       ${statCard(female,   'Female',      '#ec4899', pct(female, total))}
       ${statCard(male,     'Male',        '#3b82f6', pct(male, total))}
@@ -1067,27 +1394,249 @@ function renderDashboard(data) {
       ${statCard(displaced,'Displaced',   '#f97316', pct(displaced, total))}
       ${statCard(trained,  'Trained',     '#10b981', pct(trained, total))}
       ${statCard(placed,   'Placed',      '#06b6d4', pct(placed, total))}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
-      <div>
-        <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">By Implementing Partner</p>
-        ${barChart(byPartner, '#5B45E8')}
-      </div>
-      <div>
-        <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">By Region</p>
-        ${barChart(byRegion, '#3b82f6')}
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
-      <div>
-        <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Employment Status</p>
-        ${barChart(byEmployment, '#10b981')}
-      </div>
-      <div>
-        <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Education Level</p>
-        ${barChart(byEducation, '#f59e0b')}
-      </div>
     </div>`;
+
+  const stages = [
+    { label: 'Consented',    n: total,      prev: null,       color: '#5B45E8' },
+    { label: 'Registered',   n: registered, prev: total,      color: '#3b82f6' },
+    { label: 'Trained',      n: trained,    prev: registered, color: '#8b5cf6' },
+    { label: 'Placed',       n: placed,     prev: trained,    color: '#10b981' }
+  ];
+
+  const funnelRows = stages.map((s, i) => {
+    const w       = total ? Math.round(s.n / total * 100) : 0;
+    const conv    = s.prev ? Math.round(s.n / s.prev * 100) : 100;
+    const dropout = s.prev ? s.prev - s.n : 0;
+    const dropPct = s.prev ? Math.round(dropout / s.prev * 100) : 0;
+    const badge   = i > 0 && s.prev > 0
+      ? `<span style="font-size:0.6rem;padding:0.1rem 0.4rem;border-radius:999px;margin-left:0.4rem;font-weight:700;flex-shrink:0;background:${conv>=70?'#dcfce7':conv>=40?'#fef3c7':'#fee2e2'};color:${conv>=70?'#166534':conv>=40?'#92400e':'#991b1b'};">${conv}% conv.</span>`
+      : '';
+    const drop    = i > 0 && dropout > 0
+      ? `<div style="font-size:0.6rem;color:#ef4444;padding-left:116px;margin-bottom:0.2rem;">&#x25B2; ${dropout} (${dropPct}%) have not progressed</div>`
+      : '<div style="margin-bottom:0.25rem;"></div>';
+    return `
+      <div>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;">
+          <span style="min-width:108px;font-size:0.68rem;color:#374151;font-weight:600;flex-shrink:0;">${s.label}</span>
+          <div style="flex:1;background:#e2e8f0;border-radius:999px;height:8px;min-width:0;">
+            <div style="background:${s.color};height:8px;border-radius:999px;width:${w}%;"></div>
+          </div>
+          <span style="min-width:60px;text-align:right;font-size:0.68rem;color:#374151;font-family:monospace;font-weight:700;flex-shrink:0;">${s.n} (${w}%)</span>
+          ${badge}
+        </div>
+        ${drop}
+      </div>`;
+  }).join('');
+
+  const cvRows = `
+    <div style="padding-top:0.5rem;border-top:1px solid #e2e8f0;margin-top:0.25rem;">
+      ${pipelineBar('CV Uploaded',   cvUploaded, total, '#f59e0b')}
+      ${pipelineBar('No CV on File', noCv,       total, '#f97316')}
+    </div>`;
+
+  return `
+    ${cards}
+    <div style="background:#f8fafc;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.5rem;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.75rem;">Programme Pipeline &amp; Conversion</p>
+      ${funnelRows}${cvRows}
+    </div>`;
+}
+
+// ── 2. Daily / weekly intake trend chart ─────────────────────────────────────
+function dashSection2_Trend(data) {
+  const getConsentDate = r => r.consentSubmittedAt ? String(r.consentSubmittedAt).slice(0, 10) : '';
+  const getRegDate     = r => r.onboardingDate || '';
+
+  const allDates = [...data.map(getConsentDate), ...data.map(getRegDate)].filter(Boolean).sort();
+  if (allDates.length < 2) return '';
+
+  const minDate  = allDates[0];
+  const maxDate  = allDates[allDates.length - 1];
+  const daysDiff = (new Date(maxDate) - new Date(minDate)) / 86400000;
+  const weekly   = daysDiff > 28;
+
+  const periods = [];
+  const cur = new Date(minDate + 'T00:00:00');
+  const end = new Date(maxDate + 'T00:00:00');
+  while (cur <= end) {
+    periods.push(cur.toISOString().slice(0, 10));
+    cur.setDate(cur.getDate() + (weekly ? 7 : 1));
+  }
+  if (!periods.length) return '';
+
+  const inPeriod = (d, p) => {
+    if (!d) return false;
+    if (!weekly) return d === p;
+    const e = new Date(p + 'T00:00:00'); e.setDate(e.getDate() + 6);
+    return d >= p && d <= e.toISOString().slice(0, 10);
+  };
+
+  const consentedPer  = periods.map(p => data.filter(r => inPeriod(getConsentDate(r), p)).length);
+  const registeredPer = periods.map(p => data.filter(r => r.participantInfoStatus === 'submitted' && inPeriod(getRegDate(r), p)).length);
+  const maxVal = Math.max(...consentedPer, ...registeredPer, 1);
+
+  const fmt = p => { const d = new Date(p + 'T00:00:00'); return d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }); };
+
+  const bars = periods.map((p, i) => `
+    <div class="trend-period" title="${fmt(p)} — Consented: ${consentedPer[i]}, Registered: ${registeredPer[i]}">
+      <div class="trend-bar-wrap">
+        <div class="trend-bar-consent" style="height:${Math.round(consentedPer[i]/maxVal*100)}%"></div>
+        <div class="trend-bar-reg"     style="height:${Math.round(registeredPer[i]/maxVal*100)}%"></div>
+      </div>
+      <div class="trend-label">${fmt(p)}</div>
+    </div>`).join('');
+
+  return `
+    <div style="background:#f8fafc;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;">
+        <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin:0;">${weekly ? 'Weekly' : 'Daily'} Intake Trend</p>
+        <div style="display:flex;gap:1rem;font-size:0.62rem;color:#64748b;">
+          <span><span style="display:inline-block;width:9px;height:9px;background:#5B45E8;border-radius:2px;margin-right:3px;vertical-align:middle;"></span>Consented</span>
+          <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;margin-right:3px;vertical-align:middle;"></span>Registered</span>
+        </div>
+      </div>
+      <div class="trend-chart-wrap"><div class="trend-chart">${bars}</div></div>
+      <p style="font-size:0.6rem;color:#94a3b8;margin:0.4rem 0 0;">Grouped by onboarding date. Hover bars for detail.</p>
+    </div>`;
+}
+
+// ── 3. Partner conversion performance table ───────────────────────────────────
+function dashSection3_Partners(data) {
+  const partners = [...new Set(data.map(r => r.implementingPartner).filter(Boolean))].sort();
+  if (!partners.length) return '';
+
+  const ragBg  = p => p >= 70 ? '#dcfce7' : p >= 40 ? '#fef3c7' : '#fee2e2';
+  const ragFg  = p => p >= 70 ? '#166534' : p >= 40 ? '#92400e' : '#991b1b';
+  const ragCell = (n, d) => {
+    if (!d) return `<td style="padding:0.35rem 0.5rem;text-align:right;font-size:0.68rem;color:#94a3b8;">—</td>`;
+    const p = Math.round(n / d * 100);
+    return `<td style="padding:0.35rem 0.5rem;text-align:right;">
+      <span style="font-size:0.7rem;font-weight:700;padding:0.1rem 0.4rem;border-radius:999px;background:${ragBg(p)};color:${ragFg(p)};">${p}%</span>
+      <span style="font-size:0.6rem;color:#94a3b8;"> (${n})</span></td>`;
+  };
+
+  const rows = partners.map(p => {
+    const g   = data.filter(r => r.implementingPartner === p);
+    const reg = g.filter(r => r.participantInfoStatus === 'submitted').length;
+    const tr  = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
+    const pl  = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    return `<tr style="border-bottom:1px solid #f1f5f9;">
+      <td style="padding:0.35rem 0.5rem;font-weight:700;font-size:0.75rem;color:#1e293b;">${escapeHtml(p)}</td>
+      <td style="padding:0.35rem 0.5rem;text-align:right;font-size:0.75rem;">${g.length}</td>
+      ${ragCell(reg, g.length)}
+      ${ragCell(tr, reg)}
+      ${ragCell(pl, tr)}
+    </tr>`;
+  }).join('');
+
+  const th = (txt, right) => `<th style="padding:0.3rem 0.5rem;text-align:${right?'right':'left'};font-size:0.58rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">${txt}</th>`;
+
+  return `
+    <div style="margin-bottom:1.5rem;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Partner Conversion Performance</p>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr>${th('Partner',false)}${th('Total',true)}${th('Registered ↓',true)}${th('Trained ↓',true)}${th('Placed ↓',true)}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <p style="font-size:0.62rem;color:#94a3b8;margin-top:0.35rem;">&#x2193; = conversion rate from the previous stage &nbsp; &#x1F7E2; &#x2265;70% &nbsp; &#x1F7E1; 40–69% &nbsp; &#x1F534; &lt;40%</p>
+    </div>`;
+}
+
+// ── 4. Inclusion indicators ───────────────────────────────────────────────────
+function dashSection4_Inclusion(total, female, youth, pwd, refugee, displaced) {
+  return `
+    <div style="background:#f8fafc;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.5rem;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.75rem;">Inclusion Indicators</p>
+      ${pipelineBar('Female',       female,   total, '#ec4899')}
+      ${pipelineBar('Youth (15–35)',youth,    total, '#8b5cf6')}
+      ${pipelineBar('PWD',          pwd,      total, '#f59e0b')}
+      ${pipelineBar('Refugee',      refugee,  total, '#ef4444')}
+      ${pipelineBar('Displaced',    displaced,total, '#f97316')}
+    </div>`;
+}
+
+// ── 5. Distribution bar charts ────────────────────────────────────────────────
+function dashSection5_Charts(data, placed) {
+  const clean      = (d, field) => groupCount(d, field).filter(([k]) => k !== '(blank)');
+  const byRegion     = clean(data, 'region');
+  const byEmployment = clean(data, 'employmentStatus');
+  const byEducation  = clean(data, 'educationLevel');
+  const placed_data  = data.filter(r => r.jobPlacementStatus === 'submitted');
+  const byEmployer   = placed > 0 ? clean(placed_data, 'employerName') : [];
+
+  const mini = (title, entries, color) => entries.length
+    ? `<div><p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">${title}</p>${barChart(entries, color)}</div>`
+    : '';
+
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
+      ${mini('By Region', byRegion, '#3b82f6')}
+      ${mini('Employment Status', byEmployment, '#10b981')}
+    </div>
+    <div style="display:grid;grid-template-columns:${byEmployer.length?'1fr 1fr':'1fr'};gap:1.25rem;margin-bottom:1.5rem;">
+      ${mini('Education Level', byEducation, '#f59e0b')}
+      ${byEmployer.length ? mini('Top Employers (' + placed + ' placed)', byEmployer, '#06b6d4') : ''}
+    </div>`;
+}
+
+// ── 6. Data quality alerts ────────────────────────────────────────────────────
+function dashSection6_Quality(data) {
+  const issues = [];
+  const now = Date.now();
+
+  const mismatches = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH')).length;
+  if (mismatches) issues.push({ lvl:'red',   txt:`${mismatches} name mismatch${mismatches>1?'es':''} between consent and registration` });
+
+  const stuck = data.filter(r => {
+    if (r.participantInfoStatus === 'submitted') return false;
+    const d = r.consentSubmittedAt ? new Date(r.consentSubmittedAt) : null;
+    return d && (now - d.getTime()) / 86400000 > 7;
+  }).length;
+  if (stuck) issues.push({ lvl:'amber', txt:`${stuck} participant${stuck>1?'s':''} still haven't registered 7+ days after consent` });
+
+  const zeroAge = data.filter(r =>
+    r.participantInfoStatus === 'submitted' && r.age !== '' && r.age !== undefined && Number(r.age) < 10
+  ).length;
+  if (zeroAge) issues.push({ lvl:'red', txt:`${zeroAge} registered participant${zeroAge>1?'s':''} have an invalid date of birth (age < 10)` });
+
+  const noName = data.filter(r => r.participantInfoStatus === 'submitted' && !r.surname && !r.firstName).length;
+  if (noName) issues.push({ lvl:'amber', txt:`${noName} registered participant${noName>1?'s':''} have no name on file` });
+
+  if (!issues.length) return `
+    <div style="background:#f0fdf4;border-radius:0.75rem;padding:0.75rem 1rem;margin-bottom:1rem;border-left:3px solid #10b981;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#10b981;letter-spacing:0.07em;margin:0 0 0.25rem;">Data Quality</p>
+      <p style="font-size:0.78rem;color:#065f46;margin:0;">&#10003; No data quality issues detected</p>
+    </div>`;
+
+  const icon = { red:'🔴', amber:'🟡' };
+  const items = issues.map(i => `
+    <div style="display:flex;gap:0.5rem;font-size:0.75rem;color:#374151;padding:0.2rem 0;">
+      <span style="flex-shrink:0;">${icon[i.lvl]}</span><span>${escapeHtml(i.txt)}</span>
+    </div>`).join('');
+
+  return `
+    <div style="background:#fffbeb;border-radius:0.75rem;padding:0.75rem 1rem;margin-bottom:1rem;border-left:3px solid #f59e0b;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#92400e;letter-spacing:0.07em;margin:0 0 0.5rem;">Data Quality — ${issues.length} issue${issues.length>1?'s':''} need attention</p>
+      ${items}
+      <p style="font-size:0.65rem;color:#b45309;margin:0.5rem 0 0;">Use <strong>Update Registration</strong> in the Entry tab to resolve these.</p>
+    </div>`;
+}
+
+function pipelineBar(label, value, total, color) {
+  const w = total ? Math.round(value / total * 100) : 0;
+  return `<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;">
+    <span style="min-width:120px;font-size:0.68rem;color:#374151;font-weight:600;white-space:nowrap;flex-shrink:0;">${label}</span>
+    <div style="flex:1;background:#e2e8f0;border-radius:999px;height:7px;min-width:0;">
+      <div style="background:${color};height:7px;border-radius:999px;width:${w}%;"></div>
+    </div>
+    <span style="min-width:60px;text-align:right;font-size:0.67rem;color:#64748b;font-family:monospace;flex-shrink:0;">${value} (${w}%)</span>
+  </div>`;
+}
+
+function printDashboard() {
+  window.print();
 }
 
 function statCard(value, label, color, subtitle) {
@@ -1112,7 +1661,7 @@ function barChart(entries, color) {
   return entries.slice(0, 8).map(([label, count]) => {
     const w = max ? Math.round(count / max * 100) : 0;
     return `<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">
-      <span style="min-width:72px;max-width:72px;font-size:0.63rem;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+      <span style="min-width:90px;max-width:90px;font-size:0.63rem;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
       <div style="flex:1;background:#f1f5f9;border-radius:999px;height:6px;">
         <div style="background:${color};height:6px;border-radius:999px;width:${w}%;"></div>
       </div>
@@ -1133,30 +1682,39 @@ function loadReport() {
 
 function renderReport(data) {
   document.getElementById('reportTimestamp').textContent = 'Data as of ' + new Date().toLocaleString();
-  const partners = [...new Set(data.map(r => r.implementingPartner).filter(Boolean))].sort();
-  const regions  = [...new Set(data.map(r => r.region).filter(Boolean))].sort();
-  const partnerSel = document.getElementById('filterPartner');
-  const regionSel  = document.getElementById('filterRegion');
-  const curPartner = partnerSel.value, curRegion = regionSel.value;
-  partnerSel.innerHTML = '<option value="">All Partners</option>' + partners.map(p => `<option value="${escapeHtml(p)}"${p === curPartner ? ' selected' : ''}>${escapeHtml(p)}</option>`).join('');
-  regionSel.innerHTML  = '<option value="">All Regions</option>'  + regions.map(r  => `<option value="${escapeHtml(r)}"${r === curRegion  ? ' selected' : ''}>${escapeHtml(r)}</option>`).join('');
+  const partners   = [...new Set(data.map(r => r.implementingPartner).filter(Boolean))].sort();
+  const regions    = [...new Set(data.map(r => r.region).filter(Boolean))].sort();
+  const collectors = [...new Set(data.map(r => r.collectorName).filter(Boolean))].sort();
+
+  const partnerSel   = document.getElementById('filterPartner');
+  const regionSel    = document.getElementById('filterRegion');
+  const collectorSel = document.getElementById('filterCollector');
+  const curPartner   = partnerSel.value;
+  const curRegion    = regionSel.value;
+  const curCollector = collectorSel?.value || '';
+
+  partnerSel.innerHTML = '<option value="">All Partners</option>' +
+    partners.map(p => `<option value="${escapeHtml(p)}"${p === curPartner ? ' selected' : ''}>${escapeHtml(p)}</option>`).join('');
+  regionSel.innerHTML  = '<option value="">All Regions</option>' +
+    regions.map(r => `<option value="${escapeHtml(r)}"${r === curRegion ? ' selected' : ''}>${escapeHtml(r)}</option>`).join('');
+  if (collectorSel) {
+    collectorSel.innerHTML = '<option value="">All Collectors</option>' +
+      collectors.map(c => `<option value="${escapeHtml(c)}"${c === curCollector ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('');
+  }
   document.getElementById('reportFilters').style.display = 'flex';
   applyReportFilters();
 }
 
 function applyReportFilters() {
-  const data = formState.masterSheetData || [];
-  const pf  = document.getElementById('filterPartner')?.value || '';
-  const rf  = document.getElementById('filterRegion')?.value  || '';
-  const sf  = document.getElementById('filterSex')?.value     || '';
-  const stf = document.getElementById('filterStatus')?.value  || '';
-  const filtered = data.filter(r => {
-    if (pf  && r.implementingPartner !== pf)                          return false;
-    if (rf  && r.region !== rf)                                       return false;
-    if (sf  && r.sex !== sf)                                          return false;
-    if (stf === 'capacity'  && r.capacityBuildingStatus !== 'submitted') return false;
-    if (stf === 'placement' && r.jobPlacementStatus !== 'submitted')     return false;
-    return true;
+  const data     = formState.masterSheetData || [];
+  const filtered = applyFilters(data, {
+    startDate:  document.getElementById('filterStartDate')?.value  || '',
+    endDate:    document.getElementById('filterEndDate')?.value    || '',
+    partner:    document.getElementById('filterPartner')?.value    || '',
+    region:     document.getElementById('filterRegion')?.value     || '',
+    sex:        document.getElementById('filterSex')?.value        || '',
+    status:     document.getElementById('filterStatus')?.value     || '',
+    collector:  document.getElementById('filterCollector')?.value  || ''
   });
   formState.reportFilteredData = filtered;
   buildReportTables(filtered);
@@ -1168,9 +1726,12 @@ function buildReportTables(data) {
     document.getElementById('reportContent').innerHTML = '<p style="text-align:center;color:#94a3b8;padding:2rem;font-size:0.85rem;">No records match the current filters.</p>';
     return;
   }
-  const trained = data.filter(r => r.capacityBuildingStatus === 'submitted');
-  const placed  = data.filter(r => r.jobPlacementStatus === 'submitted');
+  const trained    = data.filter(r => r.capacityBuildingStatus === 'submitted');
+  const placed     = data.filter(r => r.jobPlacementStatus === 'submitted');
+  const cvUploaded = data.filter(r => r.cvStatus === 'cv_uploaded').length;
+  const noCv       = data.filter(r => r.cvStatus === 'no_cv').length;
 
+  // Partner summary — includes refugee + displaced + totals row
   const allPartners = [...new Set(data.map(r => r.implementingPartner || '(None)'))].sort();
   const partnerRows = allPartners.map(p => {
     const g  = data.filter(r => (r.implementingPartner || '(None)') === p);
@@ -1180,54 +1741,96 @@ function buildReportTables(data) {
       g.filter(r => r.sex === 'Female').length,
       g.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length,
       g.filter(r => r.disabilityStatus === 'Yes').length,
+      g.filter(r => r.refugeeStatus === 'Yes').length,
+      g.filter(r => r.displacementStatus === 'Yes').length,
       tr, pct(tr, g.length), pl, pct(pl, g.length)];
   });
+  const partnerTotals = ['TOTAL', total,
+    data.filter(r => r.sex === 'Female').length,
+    data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length,
+    data.filter(r => r.disabilityStatus === 'Yes').length,
+    data.filter(r => r.refugeeStatus === 'Yes').length,
+    data.filter(r => r.displacementStatus === 'Yes').length,
+    trained.length, pct(trained.length, total), placed.length, pct(placed.length, total)
+  ];
 
-  const allRegions = [...new Set(data.map(r => r.region || '(None)'))].sort();
-  const regionRows = allRegions.slice(0, 16).map(reg => {
-    const g = data.filter(r => (r.region || '(None)') === reg);
+  // Regional distribution — exclude rogue/blank regions, add totals
+  const allRegions = [...new Set(data.map(r => r.region).filter(Boolean))].sort();
+  const regionRows = allRegions.map(reg => {
+    const g = data.filter(r => r.region === reg);
     const f = g.filter(r => r.sex === 'Female').length;
     const y = g.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
-    return [reg, g.length, f, pct(f, g.length), y, pct(y, g.length)];
+    const tr = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
+    const pl = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    return [reg, g.length, f, pct(f, g.length), y, pct(y, g.length), tr, pl];
   });
 
-  const byMode       = groupCount(trained, 'trainingMode');
-  const byCompletion = groupCount(trained, 'completionStatus');
-  const bySector     = groupCount(placed,  'plSector');
-  const byEmpType    = groupCount(placed,  'employmentType');
+  // Age group breakdown
+  const AGE_GROUPS = [[15,19,'15–19'],[20,24,'20–24'],[25,29,'25–29'],[30,35,'30–35'],[36,50,'36–50'],[51,99,'51+']];
+  const ageRows = AGE_GROUPS.map(([min, max, label]) => {
+    const g = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= min && a <= max; });
+    const f = g.filter(r => r.sex === 'Female').length;
+    return [label, g.length, pct(g.length, total), f, pct(f, g.length)];
+  });
+  const ageUnknown = data.filter(r => !r.age || isNaN(Number(r.age))).length;
+
+  // Training outcomes
+  const byMode       = groupCount(trained, 'trainingMode').filter(([k]) => k !== '(blank)');
+  const byCompletion = groupCount(trained, 'completionStatus').filter(([k]) => k !== '(blank)');
+
+  // Placement outcomes
+  const bySector    = groupCount(placed, 'plSector').filter(([k]) => k !== '(blank)');
+  const byEmpType   = groupCount(placed, 'employmentType').filter(([k]) => k !== '(blank)');
+  const byEmployer  = groupCount(placed, 'employerName').filter(([k]) => k !== '(blank)');
+  const byIncome    = groupCount(placed, 'placementIncome').filter(([k]) => k !== '(blank)');
 
   document.getElementById('reportContent').innerHTML = `
-    <div style="font-size:0.7rem;color:#64748b;margin-bottom:1rem;padding:0.5rem 0.75rem;background:#f8fafc;border-radius:0.5rem;">
+
+    <!-- Summary header -->
+    <div style="font-size:0.7rem;color:#64748b;margin-bottom:1rem;padding:0.6rem 0.85rem;background:#f8fafc;border-radius:0.5rem;line-height:1.7;">
       <strong>${total}</strong> participant${total !== 1 ? 's' : ''} &bull;
+      Registered: <strong>${data.filter(r => r.participantInfoStatus === 'submitted').length}</strong> &bull;
       Trained: <strong>${trained.length}</strong> (${pct(trained.length, total)}) &bull;
-      Placed: <strong>${placed.length}</strong> (${pct(placed.length, total)})
+      Placed: <strong>${placed.length}</strong> (${pct(placed.length, total)}) &bull;
+      CV Uploaded: <strong>${cvUploaded}</strong> &bull; No CV: <strong>${noCv}</strong>
     </div>
 
+    <!-- Partner summary -->
     <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#064e3b;letter-spacing:0.07em;margin-bottom:0.5rem;">Partner Summary</p>
     ${summaryTable(
-      ['Partner','Total','Female','Youth','PWD','Trained','Trained%','Placed','Placed%'],
-      partnerRows
+      ['Partner','Total','Female','Youth','PWD','Refugee','Displaced','Trained','Trained%','Placed','Placed%'],
+      [...partnerRows, partnerTotals]
     )}
 
+    <!-- Regional distribution -->
     <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#1e3a5f;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Regional Distribution</p>
-    ${summaryTable(['Region','Total','Female','Female%','Youth','Youth%'], regionRows)}
+    ${summaryTable(['Region','Total','Female','Female%','Youth','Youth%','Trained','Placed'], regionRows)}
 
+    <!-- Age group breakdown -->
+    <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#7c3aed;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Age Group Breakdown</p>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:0 1rem;align-items:center;">
+      ${summaryTable(['Age Band','Count','% Total','Female','Female%'], ageRows)}
+    </div>
+    ${ageUnknown ? `<p style="font-size:0.65rem;color:#94a3b8;margin-top:0.25rem;">${ageUnknown} participant(s) with unknown age not included above.</p>` : ''}
+
+    <!-- Training outcomes -->
     ${trained.length ? `
     <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#4c1d95;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Training Outcomes (${trained.length} trained)</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
       <div>
         <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">By Mode</p>
-        ${summaryTable(['Mode','Count','%'], byMode.map(([k,v]) => [k, v, pct(v, trained.length)]))}
+        ${summaryTable(['Mode','Count','%'], byMode.length ? byMode.map(([k,v]) => [k, v, pct(v, trained.length)]) : [['No data','-','-']])}
       </div>
       <div>
         <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">Completion Status</p>
-        ${summaryTable(['Status','Count','%'], byCompletion.map(([k,v]) => [k, v, pct(v, trained.length)]))}
+        ${summaryTable(['Status','Count','%'], byCompletion.length ? byCompletion.map(([k,v]) => [k, v, pct(v, trained.length)]) : [['No data','-','-']])}
       </div>
     </div>` : ''}
 
+    <!-- Placement outcomes -->
     ${placed.length ? `
     <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#064e3b;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Placement Outcomes (${placed.length} placed)</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:0.75rem;">
       <div>
         <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">By Sector</p>
         ${summaryTable(['Sector','Count','%'], bySector.map(([k,v]) => [k, v, pct(v, placed.length)]))}
@@ -1235,6 +1838,16 @@ function buildReportTables(data) {
       <div>
         <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">Employment Type</p>
         ${summaryTable(['Type','Count','%'], byEmpType.map(([k,v]) => [k, v, pct(v, placed.length)]))}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div>
+        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">By Employer</p>
+        ${summaryTable(['Employer','Count','%'], byEmployer.map(([k,v]) => [k, v, pct(v, placed.length)]))}
+      </div>
+      <div>
+        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">Income Band (GHS)</p>
+        ${summaryTable(['Income','Count','%'], byIncome.map(([k,v]) => [k, v, pct(v, placed.length)]))}
       </div>
     </div>` : ''}`;
 }
@@ -1244,18 +1857,20 @@ function summaryTable(headers, rows) {
   const head = headers.map(h =>
     `<th style="padding:0.3rem 0.5rem;text-align:left;font-size:0.58rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">${h}</th>`
   ).join('');
-  const body = rows.map(row =>
-    '<tr>' + row.map((cell, i) =>
-      `<td style="padding:0.3rem 0.5rem;font-size:0.7rem;color:${i === 0 ? '#374151' : '#1e293b'};font-weight:${i === 0 ? '600' : '400'};border-bottom:1px solid #f1f5f9;">${escapeHtml(String(cell ?? ''))}</td>`
-    ).join('') + '</tr>'
-  ).join('');
+  const body = rows.map((row, ri) => {
+    const isTotal = String(row[0]).toUpperCase() === 'TOTAL';
+    const rowStyle = isTotal ? 'background:#f0f9ff;border-top:2px solid #e2e8f0;' : 'border-bottom:1px solid #f1f5f9;';
+    return '<tr style="' + rowStyle + '">' + row.map((cell, ci) =>
+      `<td style="padding:0.3rem 0.5rem;font-size:0.7rem;color:${isTotal ? '#0f172a' : (ci === 0 ? '#374151' : '#1e293b')};font-weight:${isTotal || ci === 0 ? '700' : '400'};">${escapeHtml(String(cell ?? ''))}</td>`
+    ).join('') + '</tr>';
+  }).join('');
   return `<div style="overflow-x:auto;margin-bottom:0.5rem;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function clearReportFilters() {
-  ['filterPartner','filterRegion','filterSex','filterStatus'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
+  ['filterStartDate','filterEndDate','filterCollector',
+   'filterPartner','filterRegion','filterSex','filterStatus'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
   });
   applyReportFilters();
 }
@@ -1346,4 +1961,303 @@ function updateOnlineStatus() {
   } else {
     showStatus(pending ? `Offline — ${pending} record(s) saved locally` : 'Offline — new data will be saved locally', 'offline');
   }
+}
+
+// ===== BATCH PLACEMENT =====
+let batchDetails = {};
+let batchEligible = [];
+let batchSelectedIds = new Set();
+
+function loadBatchPlacement() {
+  batchDetails = {};
+  batchEligible = [];
+  batchSelectedIds = new Set();
+  showBatchStep(1);
+  // Populate region dropdown once
+  const sel = document.getElementById('batchRegion');
+  if (sel && sel.options.length <= 1) {
+    Object.keys(CONFIG.REGIONS).sort().forEach(region => {
+      const opt = document.createElement('option');
+      opt.value = region; opt.textContent = region;
+      sel.appendChild(opt);
+    });
+  }
+}
+
+function showBatchStep(step) {
+  ['1', '2', '3', 'success'].forEach(s => {
+    const el = document.getElementById('batch-step-' + s) || document.getElementById('batch-' + s);
+    if (el) el.classList.add('hidden');
+  });
+  const target = document.getElementById('batch-step-' + step) || document.getElementById('batch-' + step);
+  if (target) target.classList.remove('hidden');
+}
+
+// ── Cascade for batch form ──
+function batchPopulateDistricts() {
+  const region = document.getElementById('batchRegion').value;
+  const dist   = document.getElementById('batchDistrict');
+  dist.innerHTML = '<option value="">Select District</option>';
+  if (region && CONFIG.REGIONS[region]) {
+    CONFIG.REGIONS[region].sort().forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      dist.appendChild(opt);
+    });
+    dist.disabled = false;
+  } else {
+    dist.disabled = true;
+  }
+}
+
+function batchPopulateIndustries() {
+  const sector = document.getElementById('batchSector').value;
+  const indSel = document.getElementById('batchIndustry');
+  const typSel = document.getElementById('batchJobType');
+  const rolSel = document.getElementById('batchJobRole');
+  [indSel, typSel, rolSel].forEach(s => { s.innerHTML = '<option value="">Select</option>'; s.disabled = true; });
+  if (sector && CONFIG.SECTOR_DATA[sector]) {
+    Object.keys(CONFIG.SECTOR_DATA[sector]).sort().forEach(ind => {
+      const opt = document.createElement('option');
+      opt.value = ind; opt.textContent = ind;
+      indSel.appendChild(opt);
+    });
+    indSel.disabled = false;
+  }
+}
+
+function batchPopulateJobTypes() {
+  const industry = document.getElementById('batchIndustry').value;
+  const typSel   = document.getElementById('batchJobType');
+  document.getElementById('batchJobRole').innerHTML = '<option value="">Select</option>';
+  document.getElementById('batchJobRole').disabled  = true;
+  if (industry) populateJobTypeOptions(typSel);
+}
+
+function batchPopulateJobRoles() {
+  const sector   = document.getElementById('batchSector').value;
+  const industry = document.getElementById('batchIndustry').value;
+  const jobType  = document.getElementById('batchJobType').value;
+  const rolSel   = document.getElementById('batchJobRole');
+  rolSel.innerHTML = '<option value="">Select</option>';
+  rolSel.disabled  = true;
+  if (sector && industry && jobType && CONFIG.SECTOR_DATA[sector]?.[industry]) {
+    CONFIG.SECTOR_DATA[sector][industry]
+      .filter(role => classifyJobRole(role) === jobType)
+      .forEach(role => {
+        const opt = document.createElement('option');
+        opt.value = role; opt.textContent = role;
+        rolSel.appendChild(opt);
+      });
+    rolSel.disabled = false;
+  }
+}
+
+function collectBatchDetails() {
+  return {
+    employerName:        document.getElementById('batchEmployerName').value.trim(),
+    placedByPartner:     document.getElementById('batchPlacedByPartner').value,
+    placementStartDate:  document.getElementById('batchStartDate').value,
+    placementRegion:     document.getElementById('batchRegion').value,
+    placementDistrict:   document.getElementById('batchDistrict').value,
+    placementCommunity:  document.getElementById('batchCommunity').value.trim(),
+    plSector:            document.getElementById('batchSector').value,
+    plIndustry:          document.getElementById('batchIndustry').value,
+    plJobType:           document.getElementById('batchJobType').value,
+    plJobRole:           document.getElementById('batchJobRole').value,
+    employmentType:      document.getElementById('batchEmploymentType').value,
+    employmentCategory:  document.getElementById('batchEmploymentCategory').value,
+    contractType:        document.getElementById('batchContractType').value,
+    workHours:           document.getElementById('batchWorkHours').value,
+    placementIncome:     document.getElementById('batchIncome').value,
+    placementIncomeFreq: document.getElementById('batchIncomeFreq').value
+  };
+}
+
+// ── Step navigation ──
+async function batchGoToStep2() {
+  const errEl = document.getElementById('batchStep1Error');
+  errEl.classList.add('hidden');
+  const d = collectBatchDetails();
+  const required = [
+    ['employerName',       'Employer Name'],
+    ['placedByPartner',    'Placed By Partner'],
+    ['placementStartDate', 'Placement Start Date'],
+    ['plSector',           'Sector'],
+    ['plIndustry',         'Industry'],
+    ['plJobType',          'Job Type'],
+    ['plJobRole',          'Job Role'],
+    ['employmentType',     'Employment Type'],
+    ['employmentCategory', 'Employment Category'],
+    ['placementIncome',    'Income']
+  ];
+  for (const [field, label] of required) {
+    if (!d[field]) {
+      errEl.textContent = `Please complete: ${label}`;
+      errEl.classList.remove('hidden');
+      return;
+    }
+  }
+  batchDetails = d;
+  try {
+    showToast('Loading eligible participants…', 'info');
+    const result = await apiAction('getEligibleForPlacement', { adminPassword: formState.adminPassword });
+    batchEligible    = result.eligible || [];
+    batchSelectedIds = new Set();
+    renderBatchParticipantList();
+    showBatchStep(2);
+  } catch (err) {
+    errEl.textContent = 'Failed to load participants: ' + err.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+function batchGoToStep1() { showBatchStep(1); }
+
+function batchGoToStep3() {
+  if (!batchSelectedIds.size) { showToast('Select at least one participant.', 'error'); return; }
+  renderBatchReview();
+  showBatchStep(3);
+}
+
+// ── Participant list ──
+function renderBatchParticipantList() {
+  const list    = document.getElementById('batchParticipantList');
+  const countEl = document.getElementById('batchEligibleCount');
+  if (!batchEligible.length) {
+    list.innerHTML = '<p style="text-align:center;padding:2rem;color:#94a3b8;font-size:0.82rem;">No participants are currently eligible.<br><small>Participants must have completed capacity building and not yet been placed.</small></p>';
+    countEl.textContent = '0 eligible participants';
+    return;
+  }
+  countEl.textContent = batchEligible.length + ' participant(s) eligible for placement';
+  list.innerHTML = batchEligible.map(p => `
+    <label style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 0.75rem;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background 0.1s;"
+           onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+      <input type="checkbox" value="${escapeHtml(p.participantId)}"
+             onchange="batchToggleParticipant(this.value, this.checked)"
+             style="width:1rem;height:1rem;accent-color:#10b981;flex-shrink:0;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:700;font-size:0.8rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</div>
+        <div style="font-size:0.67rem;color:#64748b;font-family:monospace;">${escapeHtml(p.participantId)}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:0.68rem;color:#64748b;">${escapeHtml(p.sex || '')} &bull; Age ${escapeHtml(String(p.age || '?'))}</div>
+        <div style="font-size:0.62rem;color:#94a3b8;">${escapeHtml(p.region || '')}</div>
+      </div>
+    </label>
+  `).join('');
+  updateBatchSelectedCount();
+}
+
+function batchToggleParticipant(id, checked) {
+  if (checked) batchSelectedIds.add(id);
+  else batchSelectedIds.delete(id);
+  updateBatchSelectedCount();
+}
+
+function batchSelectAll(select) {
+  batchEligible.forEach(p => select ? batchSelectedIds.add(p.participantId) : batchSelectedIds.delete(p.participantId));
+  document.querySelectorAll('#batchParticipantList input[type="checkbox"]').forEach(cb => { cb.checked = select; });
+  updateBatchSelectedCount();
+}
+
+function updateBatchSelectedCount() {
+  document.getElementById('batchSelectedCount').textContent = batchSelectedIds.size + ' selected';
+}
+
+// ── Review ──
+function renderBatchReview() {
+  const d = batchDetails;
+  document.getElementById('batchReviewSummary').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem 1.5rem;font-size:0.8rem;">
+      <div><span style="color:#94a3b8;font-size:0.63rem;text-transform:uppercase;font-weight:700;">Employer</span><br><strong>${escapeHtml(d.employerName)}</strong></div>
+      <div><span style="color:#94a3b8;font-size:0.63rem;text-transform:uppercase;font-weight:700;">Start Date</span><br><strong>${escapeHtml(d.placementStartDate)}</strong></div>
+      <div><span style="color:#94a3b8;font-size:0.63rem;text-transform:uppercase;font-weight:700;">Role</span><br><strong>${escapeHtml(d.plJobRole)}</strong> &mdash; ${escapeHtml(d.plSector)} / ${escapeHtml(d.plIndustry)}</div>
+      <div><span style="color:#94a3b8;font-size:0.63rem;text-transform:uppercase;font-weight:700;">Employment</span><br><strong>${escapeHtml(d.employmentType)}</strong>${d.contractType ? ' &bull; ' + escapeHtml(d.contractType) : ''}</div>
+      <div><span style="color:#94a3b8;font-size:0.63rem;text-transform:uppercase;font-weight:700;">Income</span><br><strong>GHS ${escapeHtml(d.placementIncome)}</strong> ${escapeHtml(d.placementIncomeFreq || '')}</div>
+      <div><span style="color:#94a3b8;font-size:0.63rem;text-transform:uppercase;font-weight:700;">Location</span><br>${escapeHtml(d.placementRegion || '—')}${d.placementDistrict ? ', ' + escapeHtml(d.placementDistrict) : ''}</div>
+    </div>
+    <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid #d1fae5;font-size:0.78rem;color:#065f46;font-weight:700;">
+      ${batchSelectedIds.size} participant(s) will be placed in this batch
+    </div>`;
+
+  const selected = batchEligible.filter(p => batchSelectedIds.has(p.participantId));
+  document.getElementById('batchReviewTable').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:0.72rem;">
+      <thead>
+        <tr style="background:#f0fdf4;">
+          ${['#','Name','ID','Sex','Age','Region'].map(h =>
+            `<th style="padding:0.4rem 0.6rem;text-align:left;color:#065f46;font-weight:900;border-bottom:2px solid #d1fae5;white-space:nowrap;">${h}</th>`
+          ).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${selected.map((p, i) => `
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:0.4rem 0.6rem;color:#94a3b8;">${i + 1}</td>
+            <td style="padding:0.4rem 0.6rem;font-weight:600;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</td>
+            <td style="padding:0.4rem 0.6rem;font-family:monospace;color:#64748b;font-size:0.67rem;">${escapeHtml(p.participantId)}</td>
+            <td style="padding:0.4rem 0.6rem;">${escapeHtml(p.sex || '')}</td>
+            <td style="padding:0.4rem 0.6rem;">${escapeHtml(String(p.age || ''))}</td>
+            <td style="padding:0.4rem 0.6rem;">${escapeHtml(p.region || '')}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Submit ──
+async function submitBatchPlacement() {
+  const btn   = document.getElementById('batchSubmitBtn');
+  const errEl = document.getElementById('batchStep3Error');
+  errEl.classList.add('hidden');
+  btn.disabled  = true;
+  btn.innerHTML = '<span class="spinner"></span> Submitting batch…';
+
+  try {
+    const result = await apiAction('submitPlacementBatch', {
+      adminPassword:  formState.adminPassword,
+      collectorName:  formState.collectorName || 'admin',
+      participantIds: Array.from(batchSelectedIds),
+      ...batchDetails
+    });
+
+    document.getElementById('batchSuccessMessage').textContent = result.message +
+      (result.failed?.length ? ` (${result.failed.length} skipped: ${result.failed.map(f => f.participantId + ' — ' + f.error).join('; ')})` : '');
+    document.getElementById('batchSuccessId').textContent = 'Batch ID: ' + result.batchId;
+    showBatchStep('success');
+    showToast(result.message, 'success');
+
+    // Refresh master data quietly in background
+    fetchProtectedSheetData(formState.adminPassword)
+      .then(data => { formState.masterSheetData = data; })
+      .catch(() => {});
+  } catch (err) {
+    errEl.textContent = 'Submission failed: ' + err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled  = false;
+    btn.innerHTML = '&#10003; Confirm &amp; Submit Batch';
+  }
+}
+
+function resetBatchPlacement() {
+  batchDetails    = {};
+  batchEligible   = [];
+  batchSelectedIds = new Set();
+  const textFields = ['batchEmployerName', 'batchCommunity', 'batchWorkHours'];
+  const selectFields = [
+    'batchPlacedByPartner', 'batchStartDate', 'batchRegion',
+    'batchSector', 'batchEmploymentType', 'batchEmploymentCategory',
+    'batchContractType', 'batchIncome', 'batchIncomeFreq'
+  ];
+  const cascadeFields = ['batchDistrict', 'batchIndustry', 'batchJobType', 'batchJobRole'];
+  [...textFields, ...selectFields].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  cascadeFields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.innerHTML = '<option value="">Select</option>'; el.disabled = true; }
+  });
+  document.getElementById('batchStep1Error').classList.add('hidden');
+  showBatchStep(1);
 }
