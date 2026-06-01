@@ -133,6 +133,7 @@ function doPost(e) {
     if (action === 'generateNameMismatchReport')  return jsonResponse(generateNameMismatchReport(payload.adminPassword));
     if (action === 'getEligibleForPlacement')     return jsonResponse(getEligibleForPlacement(payload.adminPassword));
     if (action === 'submitPlacementBatch')        return jsonResponse(submitPlacementBatch(payload));
+    if (action === 'bulkSetPartner')              return jsonResponse(bulkSetPartner(payload));
 
     throw new Error('Unsupported action: ' + action);
   } catch (err) {
@@ -315,16 +316,30 @@ function saveParticipantInfo(payload, explicitSection) {
   }
 
   // Detect name mismatch between consent name and registration name
+  const normName = s => String(s || '').toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
   if (existing.consentName && (incoming.surname || incoming.firstName)) {
-    const normalize = s => String(s || '').toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
-    const consentName    = normalize(existing.consentName);
-    const registeredName = normalize((incoming.surname || '') + ' ' + (incoming.firstName || ''));
+    const consentName    = normName(existing.consentName);
+    const registeredName = normName((incoming.surname || '') + ' ' + (incoming.firstName || ''));
     const conWords = consentName.split(' ').filter(w => w.length > 2);
     const regWords = registeredName.split(' ').filter(w => w.length > 2);
     const hasOverlap = regWords.some(w => conWords.includes(w));
     if (consentName && registeredName && !hasOverlap) {
       const flag = 'NAME_MISMATCH: consent="' + existing.consentName + '" registered="' + (incoming.surname || '') + ' ' + (incoming.firstName || '') + '"';
       incoming.adminNotes = incoming.adminNotes ? incoming.adminNotes + ' | ' + flag : flag;
+    }
+  }
+  // For legacy records (no consentName), detect if the already-registered name is being changed
+  if (!existing.consentName && existing.surname && (incoming.surname || incoming.firstName)) {
+    const existingName = normName(existing.surname + ' ' + existing.firstName);
+    const newName      = normName((incoming.surname || existing.surname) + ' ' + (incoming.firstName || existing.firstName));
+    if (existingName && newName && existingName !== newName) {
+      const existWords = existingName.split(' ').filter(w => w.length > 2);
+      const newWords   = newName.split(' ').filter(w => w.length > 2);
+      const hasOverlap = newWords.some(w => existWords.includes(w));
+      if (!hasOverlap) {
+        const flag = 'NAME_CHANGE: was="' + existing.surname + ' ' + existing.firstName + '" new="' + (incoming.surname || '') + ' ' + (incoming.firstName || '') + '"';
+        incoming.adminNotes = incoming.adminNotes ? incoming.adminNotes + ' | ' + flag : flag;
+      }
     }
   }
 
@@ -335,19 +350,23 @@ function saveParticipantInfo(payload, explicitSection) {
   const record = Object.assign(blankRecord(headers), existing, incoming, {
     participantId,
     continuationTokenHash:     existing.continuationTokenHash || tokenHash,
+    // Never allow a payload to overwrite an already-assigned HAMIS ID
+    hamisId:                   existing.hamisId || incoming.hamisId || '',
     participantInfoStatus:     'submitted',
     capacityBuildingStatus:    capacityStatus,
     jobPlacementStatus:        placementStatus,
-    currentStage:              resolveStage(capacityStatus, placementStatus),
+    currentStage:              resolveStage(capacityStatus, placementStatus, incoming.employerName || existing.employerName),
     lockedSections,
     lastUpdatedAt:             now,
     lastUpdatedBy:             payload.collectorName || payload.actor || 'participant',
     createdAt:                 existing.createdAt || now,
     createdBy:                 existing.createdBy || 'kollect',
     syncStatus:                payload.syncStatus || 'synced',
-    participantPhoneNormalized: explicitSection ? (existing.participantPhoneNormalized || '') : phone,
-    participantEmailNormalized: explicitSection ? (existing.participantEmailNormalized || '') : email,
-    ghanaCardNormalized:        explicitSection ? (existing.ghanaCardNormalized || '') : ghanaCard
+    // Always backfill normalized fields if the stored value is blank — covers capacity/placement submissions
+    // that arrive with contact details, and fixes records that were stored without normalization.
+    participantPhoneNormalized: phone || existing.participantPhoneNormalized || '',
+    participantEmailNormalized: email || existing.participantEmailNormalized || '',
+    ghanaCardNormalized:        ghanaCard || existing.ghanaCardNormalized || ''
   });
 
   if (isNew) {
@@ -669,13 +688,14 @@ const SOURCE_TO_MASTER = {
   'Location Status': 'locationStatus', 'Surname': 'surname', 'First Name': 'firstName',
   'Other Name(s)': 'otherNames', 'Sex': 'sex', 'Date of Birth': 'dob',
   'Age': 'age', 'Participant Type - Age': 'participantTypeAge',
-  'Telephone': 'telephone', 'Ghana Card ID Number': 'ghanaCardId',
+  'Telephone (E.g. 0244111111)': 'telephone', 'Ghana Card ID Number': 'ghanaCardId',
   "Voter's ID Number": 'voterId', 'Refugee Status': 'refugeeStatus',
   'Nationality (If "Yes" to Refugee)': 'nationality',
   'Disability Status': 'disabilityStatus', 'Specify Disability': 'disabilitySpecify',
   'Education Level': 'educationLevel', 'Employment Status': 'employmentStatus',
   'Occupation': 'currentOccupation', 'Monthly Income': 'monthlyIncome',
-  'Organization': 'employerName', 'Sector': 'sector', 'Job Role': 'jobRole'
+  'Organization': 'employerName',
+  'Sector': 'sector', 'Sector Type': 'industry', 'Job Role': 'jobRole'
 };
 
 function importFromSheet(payload) {
@@ -708,28 +728,69 @@ function importFromSheet(payload) {
         if (key) incoming[key] = String(row[i] || '').trim();
       });
       if (row[0]) incoming.legacyParticipantId = String(row[0]).trim();
+
+      // Mirror participant sector/industry/role into placement fields
+      if (incoming.sector)   incoming.plSector  = incoming.sector;
+      if (incoming.industry) incoming.plIndustry = incoming.industry;
+      if (incoming.jobRole)  incoming.plJobRole  = incoming.jobRole;
+
+      // Derive jobType and plJobType from role using server-side classifier
+      if (incoming.jobRole   && !incoming.jobType)   incoming.jobType   = classifyJobRoleServer(incoming.jobRole);
+      if (incoming.plJobRole && !incoming.plJobType) incoming.plJobType = classifyJobRoleServer(incoming.plJobRole);
+
+      // For legacy placed records, work location = home location when not separately recorded
+      if (incoming.region    && !incoming.workRegion)    incoming.workRegion    = incoming.region;
+      if (incoming.district  && !incoming.workDistrict)  incoming.workDistrict  = incoming.district;
+      if (incoming.community && !incoming.workCommunity) incoming.workCommunity = incoming.community;
+
+      // Infer ID type from whichever card is present
+      if (incoming.ghanaCardId)          incoming.idType = 'Ghana Card';
+      else if (incoming.voterId)         incoming.idType = 'Voter ID';
+
+      // Onboarding date doubles as placement start date for legacy records
+      if (incoming.onboardingDate)       incoming.placementStartDate = incoming.onboardingDate;
+
+      // Implementing partner is who placed the participant
+      if (incoming.implementingPartner)  incoming.placedByPartner = incoming.implementingPartner;
+
       const phone     = normalizePhone(incoming.telephone);
       const ghanaCard = normalizeGhanaCard(incoming.ghanaCardId);
       if (findParticipantRow(master, masterHeaders, { phone, ghanaCard }) > 0) { skipped++; continue; }
       const participantId = generateParticipantId(master, masterHeaders);
       const record        = blankRecord(masterHeaders);
+      // Only mark as placed if the minimum placement fields are present
+      const hasPlacement = !!(incoming.employerName && incoming.plJobRole);
       Object.assign(record, incoming, {
         participantId,
-        consentStatus:          'complete',
-        participantInfoStatus:  'submitted',
-        capacityBuildingStatus: 'not_started',
-        jobPlacementStatus:     'not_started',
-        currentStage:           'registration_complete',
-        cvStatus:               'not_started',
-        syncStatus:             'synced',
-        participantPhoneNormalized: phone,
-        ghanaCardNormalized:    ghanaCard,
-        lastUpdatedAt:          now,
-        lastUpdatedBy:          payload.actor || 'bulk_import',
-        createdAt:              now,
-        createdBy:              'bulk_import'
+        consentStatus:               'complete',
+        participantInfoStatus:       'submitted',
+        capacityBuildingStatus:      'not_started',
+        jobPlacementStatus:          hasPlacement ? 'submitted'         : 'not_started',
+        currentStage:                hasPlacement ? 'placement_complete' : 'registration_complete',
+        lockedSections:              hasPlacement ? 'jobPlacement'      : '',
+        cvStatus:                    'not_started',
+        syncStatus:                  'migrated',
+        participantPhoneNormalized:  phone,
+        ghanaCardNormalized:         ghanaCard,
+        lastUpdatedAt:               now,
+        lastUpdatedBy:               payload.actor || 'bulk_import',
+        createdAt:                   now,
+        createdBy:                   'bulk_import'
       });
+      if (!record.hamisId) {
+        record.hamisId = generateHamisId(master, masterHeaders, record.region, record.implementingPartner);
+      }
       master.appendRow(masterHeaders.map(h => toSheetValue(record[h] || '')));
+      appendParticipantInfo(record);
+      appendJobPlacement(record);
+      appendAudit({
+        participantId: record.participantId,
+        actorType:     'staff',
+        actor:         payload.actor || 'bulk_import',
+        action:        'legacyImport',
+        section:       'migration',
+        notes:         'Legacy ID: ' + (record.legacyParticipantId || '')
+      });
       imported++;
     } catch (err) {
       errors.push('Row ' + (r + 2) + ': ' + err.message);
@@ -882,9 +943,11 @@ function buildLockedSections(capacityStatus, placementStatus) {
   return locked.join(',');
 }
 
-function resolveStage(capacityStatus, placementStatus) {
-  if (placementStatus === 'submitted')  return 'placement_complete';
-  if (capacityStatus === 'submitted')   return 'capacity_complete';
+function resolveStage(capacityStatus, placementStatus, employerName) {
+  // Require employer name to be present before granting placement_complete
+  if (placementStatus === 'submitted' && employerName) return 'placement_complete';
+  if (placementStatus === 'submitted') return 'capacity_complete'; // flag set but no employer data
+  if (capacityStatus === 'submitted')  return 'capacity_complete';
   return 'registration_complete';
 }
 
@@ -973,7 +1036,23 @@ function submitPlacementBatch(payload) {
 
   const participantIds = payload.participantIds || [];
   if (!participantIds.length) throw new Error('No participants selected.');
-  if (!payload.employerName) throw new Error('Employer name is required.');
+
+  // Validate all required placement fields before touching any records
+  const BATCH_REQUIRED = [
+    ['employerName',       'Employer Name'],
+    ['placedByPartner',    'Placed By Partner'],
+    ['placementStartDate', 'Placement Start Date'],
+    ['plSector',           'Sector'],
+    ['plIndustry',         'Industry'],
+    ['plJobType',          'Job Type'],
+    ['plJobRole',          'Job Role'],
+    ['employmentType',     'Employment Type'],
+    ['employmentCategory', 'Employment Category'],
+    ['placementIncome',    'Placement Income']
+  ];
+  for (var brf = 0; brf < BATCH_REQUIRED.length; brf++) {
+    if (!payload[BATCH_REQUIRED[brf][0]]) throw new Error('Missing required field: ' + BATCH_REQUIRED[brf][1]);
+  }
 
   const master  = getMasterSheet();
   const headers = ensureHeaders(master, MASTER_HEADERS);
@@ -1183,6 +1262,86 @@ function jsonpResponse(callback, payload) {
   if (!safe) return jsonResponse({ status: 'ERROR', message: 'Invalid callback.' });
   return ContentService.createTextOutput(safe + '(' + JSON.stringify(payload) + ');')
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+// ─── BULK SET IMPLEMENTING PARTNER ───────────────────────────────────────────
+// Patches all Master rows where implementingPartner is blank.
+// Call via the app or from the Apps Script editor using runBulkSetPartner().
+function bulkSetPartner(payload) {
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+  if (!payload.implementingPartner) throw new Error('implementingPartner is required.');
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const now     = new Date().toISOString();
+  const actor   = payload.actor || 'admin';
+  const partner = String(payload.implementingPartner).trim();
+
+  const piIdx    = headers.indexOf('participantInfoStatus');
+  const partnerIdx = headers.indexOf('implementingPartner');
+  if (partnerIdx < 0) throw new Error('implementingPartner column not found in Master sheet.');
+
+  const lastRow = master.getLastRow();
+  if (lastRow < 2) return { status: 'OK', updated: 0, message: 'No data rows.' };
+
+  const rows = master.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  let updated = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const currentPartner = String(row[partnerIdx] || '').trim();
+    const infoStatus     = String(row[piIdx]       || '').trim();
+    if (currentPartner || infoStatus !== 'submitted') continue;
+
+    master.getRange(i + 2, partnerIdx + 1).setValue(partner);
+    master.getRange(i + 2, headers.indexOf('lastUpdatedAt') + 1).setValue(now);
+    master.getRange(i + 2, headers.indexOf('lastUpdatedBy') + 1).setValue(actor);
+
+    const participantId = String(row[headers.indexOf('participantId')] || '');
+    appendAudit({
+      participantId,
+      actorType: 'staff',
+      actor,
+      action:    'bulkSetPartner',
+      section:   'admin',
+      notes:     'Set implementingPartner = ' + partner
+    });
+    updated++;
+  }
+
+  return { status: 'OK', updated, message: `Updated ${updated} record(s) with partner: ${partner}.` };
+}
+
+// Run directly from Apps Script editor to patch blank-partner records.
+function runBulkSetPartner() {
+  const result = bulkSetPartner({
+    adminPassword:       PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'),
+    implementingPartner: 'Jobberman',   // ← change this before running
+    actor:               'admin'
+  });
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
+// ─── JOB ROLE CLASSIFIER (server-side mirror of client classifyJobRole) ───────
+function classifyJobRoleServer(role) {
+  const text = String(role || '').toLowerCase();
+  if (/\b(manager|director|principal|dean|registrar|administrator|superintendent|cto|lead|head)\b/.test(text)) return 'Management';
+  if (/\b(accountant|bookkeeper|officer|coordinator|specialist|analyst|secretary|clerk|cashier|teller|buyer|recruiter|writer|controller|auditor|agent|rep|representative|relationship|records|admissions|documentation|dispatcher)\b/.test(text)) return 'Administrative';
+  if (/\b(cleaner|security|guard|driver|loader|laborer|worker|operator|attendant|hand|janitor|gardener|courier|picker|stocker|sanitation|bellhop|housekeeper|laundry|storekeeper|helper|assistant)\b/.test(text)) return 'Support';
+  return 'Technical';
+}
+
+// ─── ONE-TIME LEGACY MIGRATION ────────────────────────────────────────────────
+// Run once from the Apps Script editor (Run → runMigration). Check Logs for result.
+function runMigration() {
+  const result = importFromSheet({
+    adminPassword:        PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'),
+    sourceSpreadsheetId:  '1wmEH-iDZVBairol-4COpj1a5dUdHPz7wOfqCCZpWtso',
+    sourceSheetGid:       0,
+    actor:                'migration_2026'
+  });
+  Logger.log(JSON.stringify(result, null, 2));
 }
 
 // ─── DRIVE AUTH HELPER ────────────────────────────────────────────────────────

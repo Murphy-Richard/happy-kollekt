@@ -191,11 +191,13 @@ async function submitCapacityConsent() {
     const token = result.token;
     formState.token = token;
     formState.accessMode = 'capacity-new';
-    formState.consentName = name;
+    // Preserve whatever name was already on file; only pre-fill if fields are blank
+    formState.consentName = result.existingConsentName || name;
     document.getElementById('capacityConsentScreen').classList.add('hidden');
     initializeForm();
-    document.getElementById('surname').value   = name.trim().split(/\s+/)[0] || '';
-    document.getElementById('firstName').value = name.trim().split(/\s+/).slice(1).join(' ') || '';
+    const parts = (result.existingConsentName || name).trim().split(/\s+/);
+    if (!document.getElementById('surname').value)    document.getElementById('surname').value   = parts[0] || '';
+    if (!document.getElementById('firstName').value) document.getElementById('firstName').value = parts.slice(1).join(' ') || '';
     document.getElementById('telephone').value = phone;
     showSections({ A: true, B: true, C: true, D: false });
     document.getElementById('view-form').classList.remove('hidden');
@@ -962,7 +964,8 @@ async function handleSubmit(e) {
   if (document.getElementById('idType').value === 'Ghana Card' && !validateGhanaCard(document.getElementById('ghanaCardId'))) return;
 
   // Name alignment check — warn if registered name doesn't share any words with consent name
-  if (formState.consentName && formState.accessMode !== 'admin') {
+  // Admin submissions are included so silent overwrites are caught too
+  if (formState.consentName) {
     const surname    = document.getElementById('surname').value.trim();
     const firstName  = document.getElementById('firstName').value.trim();
     if (!namesMatch(formState.consentName, surname, firstName)) {
@@ -1581,46 +1584,130 @@ function dashSection5_Charts(data, placed) {
     </div>`;
 }
 
-// ── 6. Data quality alerts ────────────────────────────────────────────────────
+// ── 6. Data quality alerts — expandable per-participant lists ─────────────────
 function dashSection6_Quality(data) {
-  const issues = [];
   const now = Date.now();
 
-  const mismatches = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH')).length;
-  if (mismatches) issues.push({ lvl:'red',   txt:`${mismatches} name mismatch${mismatches>1?'es':''} between consent and registration` });
-
-  const stuck = data.filter(r => {
+  const mismatchPx = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH'));
+  const stuckPx    = data.filter(r => {
     if (r.participantInfoStatus === 'submitted') return false;
     const d = r.consentSubmittedAt ? new Date(r.consentSubmittedAt) : null;
     return d && (now - d.getTime()) / 86400000 > 7;
-  }).length;
-  if (stuck) issues.push({ lvl:'amber', txt:`${stuck} participant${stuck>1?'s':''} still haven't registered 7+ days after consent` });
-
-  const zeroAge = data.filter(r =>
+  });
+  const badAgePx   = data.filter(r =>
     r.participantInfoStatus === 'submitted' && r.age !== '' && r.age !== undefined && Number(r.age) < 10
-  ).length;
-  if (zeroAge) issues.push({ lvl:'red', txt:`${zeroAge} registered participant${zeroAge>1?'s':''} have an invalid date of birth (age < 10)` });
+  );
+  const noNamePx   = data.filter(r =>
+    r.participantInfoStatus === 'submitted' && !r.surname && !r.firstName
+  );
+  const noPartnerPx = data.filter(r =>
+    r.participantInfoStatus === 'submitted' && !r.implementingPartner
+  );
 
-  const noName = data.filter(r => r.participantInfoStatus === 'submitted' && !r.surname && !r.firstName).length;
-  if (noName) issues.push({ lvl:'amber', txt:`${noName} registered participant${noName>1?'s':''} have no name on file` });
-
-  if (!issues.length) return `
+  if (!mismatchPx.length && !stuckPx.length && !badAgePx.length && !noNamePx.length && !noPartnerPx.length) return `
     <div style="background:#f0fdf4;border-radius:0.75rem;padding:0.75rem 1rem;margin-bottom:1rem;border-left:3px solid #10b981;">
       <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#10b981;letter-spacing:0.07em;margin:0 0 0.25rem;">Data Quality</p>
       <p style="font-size:0.78rem;color:#065f46;margin:0;">&#10003; No data quality issues detected</p>
     </div>`;
 
-  const icon = { red:'🔴', amber:'🟡' };
-  const items = issues.map(i => `
-    <div style="display:flex;gap:0.5rem;font-size:0.75rem;color:#374151;padding:0.2rem 0;">
-      <span style="flex-shrink:0;">${icon[i.lvl]}</span><span>${escapeHtml(i.txt)}</span>
-    </div>`).join('');
+  const fullName = r => ((r.surname || '') + ' ' + (r.firstName || '')).trim() || '—';
+
+  const qTable = (cols, rows) => {
+    const th = cols.map(c =>
+      `<th style="padding:0.25rem 0.5rem;font-size:0.57rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#fafafa;border-bottom:1px solid #e2e8f0;white-space:nowrap;text-align:left;">${c}</th>`
+    ).join('');
+    const body = rows.map(cells =>
+      '<tr>' + Object.values(cells).map(v =>
+        `<td style="padding:0.25rem 0.5rem;font-size:0.67rem;color:#374151;border-bottom:1px solid #f1f5f9;white-space:nowrap;">${escapeHtml(String(v ?? '—'))}</td>`
+      ).join('') + '</tr>'
+    ).join('');
+    return `<div style="overflow-x:auto;margin-top:0.4rem;max-height:200px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:0.35rem;">
+      <table style="width:100%;border-collapse:collapse;"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+  };
+
+  const block = (icon, color, label, table) => `
+    <details style="margin-bottom:0.5rem;">
+      <summary style="cursor:pointer;display:flex;align-items:center;gap:0.4rem;font-size:0.72rem;font-weight:700;color:${color};padding:0.3rem 0;list-style:none;user-select:none;">
+        <span>${icon}</span><span>${label}</span><span style="margin-left:auto;font-size:0.6rem;font-weight:400;color:#94a3b8;">▶ expand</span>
+      </summary>
+      ${table}
+    </details>`;
+
+  const blocks = [];
+
+  if (mismatchPx.length) blocks.push(block('🔴', '#991b1b',
+    `${mismatchPx.length} name mismatch${mismatchPx.length > 1 ? 'es' : ''} — consent name vs. registered name`,
+    qTable(['HAPPY ID', 'Consent Name', 'Registered Name', 'Region', 'Partner'],
+      mismatchPx.map(r => ({
+        id:      r.participantId        || '—',
+        consent: r.consentName          || '—',
+        reg:     fullName(r),
+        region:  r.region               || '—',
+        partner: r.implementingPartner  || '—'
+      }))
+    )
+  ));
+
+  if (stuckPx.length) blocks.push(block('🟡', '#92400e',
+    `${stuckPx.length} participant${stuckPx.length > 1 ? 's' : ''} consented 7+ days ago but not yet registered`,
+    qTable(['HAPPY ID', 'Consent Name', 'Consented', 'Days Waiting', 'Partner'],
+      stuckPx.map(r => ({
+        id:      r.participantId || '—',
+        name:    r.consentName   || '—',
+        date:    r.consentSubmittedAt ? String(r.consentSubmittedAt).slice(0, 10) : '—',
+        days:    r.consentSubmittedAt ? Math.floor((now - new Date(r.consentSubmittedAt).getTime()) / 86400000) : '—',
+        partner: r.implementingPartner || '—'
+      }))
+    )
+  ));
+
+  if (badAgePx.length) blocks.push(block('🔴', '#991b1b',
+    `${badAgePx.length} participant${badAgePx.length > 1 ? 's' : ''} with invalid date of birth (age < 10)`,
+    qTable(['HAPPY ID', 'Name', 'Age', 'DOB', 'Region'],
+      badAgePx.map(r => ({
+        id:     r.participantId || '—',
+        name:   fullName(r),
+        age:    r.age           || '—',
+        dob:    r.dob           || '—',
+        region: r.region        || '—'
+      }))
+    )
+  ));
+
+  if (noNamePx.length) blocks.push(block('🟡', '#92400e',
+    `${noNamePx.length} registered participant${noNamePx.length > 1 ? 's' : ''} with no name on file`,
+    qTable(['HAPPY ID', 'Region', 'District', 'Partner', 'Onboarding Date'],
+      noNamePx.map(r => ({
+        id:      r.participantId        || '—',
+        region:  r.region               || '—',
+        dist:    r.district             || '—',
+        partner: r.implementingPartner  || '—',
+        date:    r.onboardingDate       || '—'
+      }))
+    )
+  ));
+
+  if (noPartnerPx.length) blocks.push(block('🟠', '#92400e',
+    `${noPartnerPx.length} registered participant${noPartnerPx.length > 1 ? 's' : ''} with no implementing partner assigned`,
+    qTable(['HAPPY ID', 'Name', 'Region', 'District', 'Onboarding Date', 'Created By'],
+      noPartnerPx.map(r => ({
+        id:      r.participantId  || '—',
+        name:    fullName(r),
+        region:  r.region         || '—',
+        dist:    r.district       || '—',
+        date:    r.onboardingDate || '—',
+        by:      r.createdBy      || '—'
+      }))
+    )
+  ));
+
+  const totalAffected = mismatchPx.length + stuckPx.length + badAgePx.length + noNamePx.length + noPartnerPx.length;
 
   return `
     <div style="background:#fffbeb;border-radius:0.75rem;padding:0.75rem 1rem;margin-bottom:1rem;border-left:3px solid #f59e0b;">
-      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#92400e;letter-spacing:0.07em;margin:0 0 0.5rem;">Data Quality — ${issues.length} issue${issues.length>1?'s':''} need attention</p>
-      ${items}
-      <p style="font-size:0.65rem;color:#b45309;margin:0.5rem 0 0;">Use <strong>Update Registration</strong> in the Entry tab to resolve these.</p>
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#92400e;letter-spacing:0.07em;margin:0 0 0.6rem;">Data Quality — ${totalAffected} participant${totalAffected > 1 ? 's' : ''} need attention</p>
+      ${blocks.join('')}
+      <p style="font-size:0.65rem;color:#b45309;margin:0.5rem 0 0;">Click each issue to expand the participant list. Use <strong>Update Registration</strong> in the Entry tab to resolve.</p>
     </div>`;
 }
 
