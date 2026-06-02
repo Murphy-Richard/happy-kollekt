@@ -1,8 +1,6 @@
 // ===== CONFIGURATION =====
 const CONFIG = {
   API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbwAnymRCItipYfY66c96mrSRdJE_r2x84J7caU3LmdxRcUgUgmQTOOAe7jdbxm1UgJB/exec',
-  CONSENT_FORM_URL: 'https://murphy-richard.github.io/happy-consent-form/',
-  CONSENT_API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbwOJGkeb5cUERtNF0UVAoljCzZE6wnTSrk4lpzQtDzYXgpyhiZWhdUXph7OdrbAbf9l/exec',
   QUEUE_KEY: 'happy_kollect_pending',
   LOCAL_DB_KEY: 'happy_kollect_db',
   DEVICE_ID_KEY: 'happyKollectDeviceId',
@@ -60,8 +58,12 @@ let formState = {
   currentView: 'form',
   isSheetLoading: false,
   pendingAdminView: null,
-  accessMode: null, // 'token' | 'capacity-existing' | 'capacity-new' | 'admin'
-  consentName: ''   // stored when participant is loaded, used for name mismatch check
+  accessMode: null,  // 'token' | 'capacity-existing' | 'capacity-new' | 'admin'
+  consentName: '',   // stored when participant is loaded, used for name mismatch check
+  // Consent step canvas state
+  consentSigned: false,
+  consentDrawing: false,
+  consentContext: null
 };
 
 let db = JSON.parse(localStorage.getItem(CONFIG.LOCAL_DB_KEY)) || [];
@@ -71,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   updatePartnerDisplays();
   syncPendingSubmissions();
+  initializeConsentStep();
   initializeFromUrlParams();
 });
 
@@ -96,21 +99,288 @@ function initializeForm() {
 function initializeFromUrlParams() {
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
-  const mode = params.get('mode');
+  const mode  = params.get('mode');
 
   if (token) {
     unlockWithToken(token);
   } else if (mode === 'capacity') {
     showCapacityEntryScreen();
   } else {
-    showLockedScreen();
+    showEntryModeScreen();
+  }
+}
+
+function showEntryModeScreen() {
+  ['lockedScreen','entryModeScreen','continueScreen','consentSuccessScreen',
+   'capacityConsentScreen','capacityEntryScreen','adminStageScreen',
+   'placementLookupScreen','registrationLookupScreen','view-form'].forEach(id => {
+    document.getElementById(id)?.classList.add('hidden');
+  });
+  document.getElementById('entryModeScreen').classList.remove('hidden');
+}
+
+function showContinueScreen() {
+  document.getElementById('entryModeScreen').classList.add('hidden');
+  document.getElementById('continueScreen').classList.remove('hidden');
+  document.getElementById('continueInput').value = '';
+  document.getElementById('continueError').classList.add('hidden');
+  document.getElementById('continueInput').focus();
+}
+
+function showPlacementLookup() {
+  showEntryModeScreen();
+  document.getElementById('entryModeScreen').classList.add('hidden');
+  document.getElementById('placementLookupScreen')?.classList.remove('hidden');
+}
+
+async function submitContinue() {
+  const raw   = (document.getElementById('continueInput')?.value || '').trim();
+  const errEl = document.getElementById('continueError');
+  errEl.classList.add('hidden');
+  if (!raw) {
+    errEl.textContent = 'Please enter a HAPPY ID, phone number, or paste the link.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  // Extract token from a pasted URL
+  try {
+    const url   = new URL(raw);
+    const token = url.searchParams.get('token');
+    if (token) { unlockWithToken(token); return; }
+  } catch (_) {}
+
+  // Raw token (64-char hex)
+  if (/^[0-9a-f]{64}$/i.test(raw)) { unlockWithToken(raw); return; }
+
+  // Otherwise treat as a participant lookup (ID, phone, name)
+  try {
+    const result = await apiAction('getParticipantByLookup', { query: raw });
+    if (result.status === 'MULTIPLE') {
+      renderNameMatchList(result.participants);
+      return;
+    }
+    if (!result?.participant?.participantId) throw new Error('No participant found.');
+    document.getElementById('continueScreen').classList.add('hidden');
+    formState.accessMode  = 'admin';
+    formState.consentName = result.participant.consentName || '';
+    initializeForm();
+    prefillParticipantInfo(result.participant);
+    showSections({ A: true, B: true, C: false, D: false });
+    document.getElementById('view-form').classList.remove('hidden');
+    showRegistrationUpdateBanner(result.participant);
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not find that participant. Try their HAPPY ID or phone.';
+    errEl.classList.remove('hidden');
   }
 }
 
 function showLockedScreen() {
+  // Only shown when a token link is invalid/expired
+  ['entryModeScreen','continueScreen','consentSuccessScreen',
+   'capacityConsentScreen','capacityEntryScreen','view-form'].forEach(id => {
+    document.getElementById(id)?.classList.add('hidden');
+  });
   document.getElementById('lockedScreen').classList.remove('hidden');
-  document.getElementById('view-form').classList.add('hidden');
-  document.getElementById('capacityEntryScreen').classList.add('hidden');
+}
+
+// ===== CONSENT STEP =====
+function startNewParticipant() {
+  formState.entryMode = 'registration';
+  formState.participant = null;
+  formState.token = '';
+  showConsentStep();
+}
+
+function showConsentStep() {
+  ['entryModeScreen','continueScreen','consentSuccessScreen',
+   'capacityEntryScreen','capacityConsentScreen','view-form'].forEach(id => {
+    document.getElementById(id)?.classList.add('hidden');
+  });
+  document.getElementById('consentStep')?.classList.remove('hidden');
+  setTimeout(setupConsentCanvas, 50);
+  document.getElementById('consentVenue')?.focus();
+}
+
+function backToEntryChoice() {
+  document.getElementById('consentStep')?.classList.add('hidden');
+  showEntryModeScreen();
+}
+
+function initializeConsentStep() {
+  setupConsentCanvas();
+  const clearBtn = document.getElementById('clearConsentSig');
+  if (clearBtn) clearBtn.addEventListener('click', clearConsentSignature);
+  const canvas = document.getElementById('consentSig');
+  if (!canvas) return;
+  canvas.addEventListener('mousedown',  startConsentSignature);
+  canvas.addEventListener('mousemove',  moveConsentSignature);
+  canvas.addEventListener('mouseup',    endConsentSignature);
+  canvas.addEventListener('mouseleave', endConsentSignature);
+  canvas.addEventListener('touchstart', startConsentSignature, { passive: false });
+  canvas.addEventListener('touchmove',  moveConsentSignature,  { passive: false });
+  canvas.addEventListener('touchend',   endConsentSignature);
+  window.addEventListener('resize', setupConsentCanvas);
+}
+
+function setupConsentCanvas() {
+  const canvas = document.getElementById('consentSig');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width) return;
+  const dpr = window.devicePixelRatio || 1;
+  const nextWidth  = Math.round(rect.width  * dpr);
+  const nextHeight = Math.round(rect.height * dpr);
+  if (canvas.width === nextWidth && canvas.height === nextHeight && formState.consentContext) return;
+  const prev = formState.consentSigned && canvas.width && canvas.height ? canvas.toDataURL('image/png') : '';
+  canvas.width  = nextWidth;
+  canvas.height = nextHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111827';
+  formState.consentContext = ctx;
+  if (prev) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, rect.width, rect.height); img.src = prev; }
+}
+
+function getConsentPoint(e) {
+  const canvas = document.getElementById('consentSig');
+  const rect   = canvas.getBoundingClientRect();
+  const src    = e.touches?.[0] || e;
+  return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+}
+
+function startConsentSignature(e) {
+  e.preventDefault();
+  const ctx = formState.consentContext;
+  if (!ctx) return;
+  formState.consentDrawing = true;
+  formState.consentSigned  = true;
+  const p = getConsentPoint(e);
+  ctx.beginPath(); ctx.moveTo(p.x, p.y);
+}
+
+function moveConsentSignature(e) {
+  if (!formState.consentDrawing || !formState.consentContext) return;
+  e.preventDefault();
+  const p = getConsentPoint(e);
+  formState.consentContext.lineTo(p.x, p.y);
+  formState.consentContext.stroke();
+}
+
+function endConsentSignature() {
+  if (!formState.consentDrawing) return;
+  formState.consentDrawing = false;
+  formState.consentContext?.closePath();
+}
+
+function clearConsentSignature() {
+  const canvas = document.getElementById('consentSig');
+  const ctx    = formState.consentContext;
+  if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  formState.consentSigned = false;
+  setConsentStatus('', '');
+}
+
+function setConsentStatus(message, type) {
+  const el = document.getElementById('consentStatus');
+  if (!el) return;
+  if (!message) { el.className = 'status-bar hidden'; el.textContent = ''; return; }
+  el.className = `status-bar ${type === 'error' ? 'offline' : 'online'}`;
+  el.innerHTML = message;
+}
+
+function validateConsentFields() {
+  for (const id of ['consentVenue', 'consentName', 'consentPhone']) {
+    const field = document.getElementById(id);
+    if (!String(field?.value || '').trim()) {
+      setConsentStatus(`Please complete: ${getFieldLabel(field)}`, 'error');
+      field?.focus();
+      return false;
+    }
+  }
+  if (!formState.consentSigned) {
+    setConsentStatus('Please provide the participant signature.', 'error');
+    document.getElementById('consentSig')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return false;
+  }
+  if (!document.getElementById('consentAgree')?.checked) {
+    setConsentStatus('Please tick the consent agreement box.', 'error');
+    return false;
+  }
+  return true;
+}
+
+async function handleConsentSubmit(event) {
+  event.preventDefault();
+  if (!navigator.onLine) {
+    setConsentStatus('Consent requires an internet connection.', 'error');
+    return;
+  }
+  if (!validateConsentFields()) return;
+
+  const button   = document.getElementById('consentSubmitBtn');
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = '<span class="spinner"></span> Submitting consent...';
+  setConsentStatus('Processing…', 'success');
+
+  try {
+    const canvas  = document.getElementById('consentSig');
+    const payload = {
+      venue:        document.getElementById('consentVenue').value.trim(),
+      name:         document.getElementById('consentName').value.trim(),
+      phone:        document.getElementById('consentPhone').value.trim(),
+      email:        document.getElementById('consentEmail').value.trim(),
+      consentGiven: true,
+      timestamp:    new Date().toISOString(),
+      signature:    canvas.toDataURL('image/png'),
+      language:     navigator.language || 'en'
+    };
+    const result = await apiAction('initConsent', payload);
+    formState.token       = result.token || '';
+    formState.consentName = result.existingConsentName || payload.name;
+    if (formState.token) localStorage.setItem('happyContinuationToken', formState.token);
+
+    // Show post-consent options — no redirect
+    document.getElementById('consentStep').classList.add('hidden');
+    document.getElementById('consentSuccessScreen').classList.remove('hidden');
+    document.getElementById('consentSuccessId').textContent   = result.participantId || '';
+    document.getElementById('consentSuccessName').textContent = payload.name + (payload.phone ? ' · ' + payload.phone : '');
+    document.getElementById('consentSuccessEmail').textContent = result.emailSent
+      ? '✉ Registration link sent to ' + payload.email
+      : (payload.email ? '✉ Could not send email — share the link manually' : '');
+
+    // Store participant stub for pre-filling
+    formState.participant = {
+      participantId: result.participantId,
+      consentName:   payload.name,
+      consentPhone:  payload.phone,
+      telephone:     payload.phone
+    };
+  } catch (err) {
+    setConsentStatus(`Consent failed: ${err.message}`, 'error');
+  } finally {
+    button.disabled  = false;
+    button.innerHTML = original;
+  }
+}
+
+function continueToRegistration() {
+  document.getElementById('consentSuccessScreen').classList.add('hidden');
+  formState.accessMode = 'token';
+  initializeForm();
+  if (formState.participant) prefillParticipantInfo(formState.participant);
+  showSections({ A: true, B: true, C: false, D: false });
+  document.getElementById('view-form').classList.remove('hidden');
+}
+
+function continueToRegistrationWithCapacity() {
+  document.getElementById('consentSuccessScreen').classList.add('hidden');
+  formState.accessMode = 'capacity-new';
+  initializeForm();
+  if (formState.participant) prefillParticipantInfo(formState.participant);
+  showSections({ A: true, B: true, C: true, D: false });
+  document.getElementById('view-form').classList.remove('hidden');
 }
 
 function showCapacityEntryScreen() {
@@ -179,12 +449,13 @@ async function submitCapacityConsent() {
 
   try {
     const signatureDataUrl = ccSigCanvas.toDataURL('image/png');
-    const response = await fetch(CONFIG.CONSENT_API_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'initConsent', name, phone, email, venue, signature: signatureDataUrl, language: 'en', timestamp: new Date().toISOString() })
+    const result = await apiAction('initConsent', {
+      name, phone, email, venue,
+      signature:    signatureDataUrl,
+      language:     'en',
+      timestamp:    new Date().toISOString(),
+      consentGiven: true
     });
-    const result = await response.json();
     if (result.status !== 'OK') throw new Error(result.message || 'Consent submission failed.');
 
     // Consent recorded — now unlock capacity building with the returned token
@@ -302,6 +573,8 @@ function prefillParticipantInfo(data) {
 }
 
 function setupEventListeners() {
+  const consentForm = document.getElementById('consentForm');
+  if (consentForm) consentForm.addEventListener('submit', handleConsentSubmit);
   document.getElementById('collectorName').addEventListener('change', e => {
     formState.collectorName = e.target.value;
     localStorage.setItem('happyKollectCollector', e.target.value);
@@ -1141,7 +1414,8 @@ function collectFormData() {
 
 function handleSubmitAnother() {
   if (formState.accessMode === 'token') {
-    window.location.href = CONFIG.CONSENT_FORM_URL;
+    // After a token-based registration, go back to the entry screen for a new participant
+    returnToWorkflowStart();
   } else if (formState.accessMode === 'capacity-new' || formState.accessMode === 'capacity-existing') {
     document.getElementById('successScreen').classList.remove('show');
     document.getElementById('mainForm').classList.remove('hidden');
@@ -1192,6 +1466,32 @@ function resetForm() {
   updateIds();
   hideStatus();
   formState.isSubmitting = false;
+}
+
+function returnToWorkflowStart() {
+  resetForm();
+  formState.token       = null;
+  formState.participant = null;
+  formState.accessMode  = null;
+  formState.consentName = '';
+  formState.consentSigned  = false;
+  formState.consentDrawing = false;
+  formState.consentContext = null;
+  localStorage.removeItem('happyContinuationToken');
+  document.getElementById('mainForm')?.classList.add('hidden');
+  document.getElementById('consentStep')?.classList.add('hidden');
+  document.getElementById('consentSuccessScreen')?.classList.add('hidden');
+  document.getElementById('successScreen')?.classList.remove('show');
+  // Clear consent step fields for the next participant
+  ['consentVenue','consentName','consentPhone','consentEmail'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const consentAgree = document.getElementById('consentAgree');
+  if (consentAgree) consentAgree.checked = false;
+  clearConsentSignature();
+  showEntryModeScreen();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ===== MASTER SHEET FUNCTIONS =====

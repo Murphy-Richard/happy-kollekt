@@ -39,12 +39,123 @@
 <!-- MAIN CONTAINER -->
 <div class="max-w-7xl mx-auto px-4 mt-4">
 
-  <!-- LOCKED SCREEN -->
+  <!-- ENTRY MODE SCREEN (default landing) -->
+  <div id="entryModeScreen" class="hidden" style="max-width:560px;margin:1.5rem auto;">
+    <div style="background:#fff;border-radius:1rem;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:1.75rem;">
+      <h2 style="font-weight:900;font-size:1.05rem;color:#1e293b;margin-bottom:0.2rem;">HAPPY Program &mdash; Field Registration</h2>
+      <p style="color:#64748b;font-size:0.8rem;margin-bottom:1.5rem;">Choose how to get started.</p>
+      <!-- Primary actions -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+        <button type="button" onclick="startNewParticipant()"
+          style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;padding:1.25rem 0.75rem;border-radius:0.75rem;border:2px solid #5B45E8;background:#faf9ff;cursor:pointer;transition:background 0.15s;"
+          onmouseover="this.style.background='#ede9fe'" onmouseout="this.style.background='#faf9ff'">
+          <div style="font-size:1.75rem;">&#x1F4DD;</div>
+          <div style="font-weight:800;font-size:0.88rem;color:#1e293b;">New Participant</div>
+          <div style="font-size:0.7rem;color:#7c3aed;text-align:center;">Take consent &amp; register</div>
+        </button>
+        <button type="button" onclick="showContinueScreen()"
+          style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;padding:1.25rem 0.75rem;border-radius:0.75rem;border:2px solid #e2e8f0;background:#f8fafc;cursor:pointer;transition:background 0.15s;"
+          onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#f8fafc'">
+          <div style="font-size:1.75rem;">&#x1F517;</div>
+          <div style="font-weight:800;font-size:0.88rem;color:#1e293b;">Continue</div>
+          <div style="font-size:0.7rem;color:#64748b;text-align:center;">Have a link or HAPPY ID</div>
+        </button>
+      </div>
+      <!-- Secondary actions -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:1rem;">
+        <button type="button" onclick="showCapacityEntryScreen()"
+          style="display:flex;align-items:center;gap:0.6rem;padding:0.85rem 1rem;border-radius:0.65rem;border:1px solid #e2e8f0;background:#fff;cursor:pointer;"
+          onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+          <span style="font-size:1.1rem;">&#x1F393;</span>
+          <div style="text-align:left;">
+            <div style="font-weight:700;font-size:0.8rem;color:#1e293b;">Capacity Mode</div>
+            <div style="font-size:0.65rem;color:#64748b;">Training collection</div>
+          </div>
+        </button>
+        <button type="button" onclick="showPlacementLookup()"
+          style="display:flex;align-items:center;gap:0.6rem;padding:0.85rem 1rem;border-radius:0.65rem;border:1px solid #e2e8f0;background:#fff;cursor:pointer;"
+          onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+          <span style="font-size:1.1rem;">&#x1F4BC;</span>
+          <div style="text-align:left;">
+            <div style="font-weight:700;font-size:0.8rem;color:#1e293b;">Job Placement</div>
+            <div style="font-size:0.65rem;color:#64748b;">Individual placement</div>
+          </div>
+        </button>
+      </div>
+      <button type="button" onclick="showAdminLogin('form')"
+        style="width:100%;padding:0.7rem;border-radius:0.65rem;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font-size:0.8rem;color:#64748b;font-weight:600;"
+        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+        &#x1F510; Admin Login
+      </button>
+    </div>
+  </div>
+
+  <!-- CONTINUE SCREEN (token or ID input) -->
+  <div id="continueScreen" class="hidden" style="max-width:480px;margin:1.5rem auto;">
+    <div style="background:#fff;border-radius:1rem;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:1.75rem;">
+      <button type="button" onclick="showEntryModeScreen()" style="font-size:0.75rem;color:#64748b;background:none;border:none;cursor:pointer;margin-bottom:1rem;padding:0;">&#x2190; Back</button>
+      <h2 style="font-weight:900;font-size:1rem;color:#1e293b;margin-bottom:0.25rem;">Continue Registration</h2>
+      <p style="color:#64748b;font-size:0.8rem;margin-bottom:1.25rem;">Paste the link you received, or enter the participant's HAPPY ID or phone number.</p>
+      <input type="text" id="continueInput" placeholder="HAPPY-2026-000001 or phone or paste link…"
+        style="width:100%;padding:0.7rem 0.85rem;border:1.5px solid #e2e8f0;border-radius:0.5rem;font-size:0.82rem;margin-bottom:0.75rem;box-sizing:border-box;"
+        onkeydown="if(event.key==='Enter') submitContinue()">
+      <p id="continueError" class="hidden" style="font-size:0.75rem;color:#ef4444;margin-bottom:0.5rem;"></p>
+      <button type="button" onclick="submitContinue()"
+        style="width:100%;padding:0.75rem;border-radius:0.5rem;background:#5B45E8;color:#fff;font-weight:700;font-size:0.85rem;border:none;cursor:pointer;">
+        Continue &#x2192;
+      </button>
+    </div>
+  </div>
+
+  <!-- CONSENT SUCCESS / POST-CONSENT OPTIONS -->
+  <div id="consentSuccessScreen" class="hidden" style="max-width:520px;margin:1.5rem auto;">
+    <div style="background:#fff;border-radius:1rem;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:1.75rem;">
+      <div style="text-align:center;margin-bottom:1.25rem;">
+        <div style="font-size:2.5rem;margin-bottom:0.5rem;">&#x2705;</div>
+        <h2 style="font-weight:900;font-size:1.05rem;color:#1e293b;margin-bottom:0.25rem;">Consent Recorded</h2>
+        <p id="consentSuccessId" style="font-size:0.82rem;color:#5B45E8;font-weight:700;font-family:monospace;"></p>
+        <p id="consentSuccessName" style="font-size:0.8rem;color:#64748b;margin-top:0.2rem;"></p>
+        <p id="consentSuccessEmail" style="font-size:0.72rem;color:#10b981;margin-top:0.15rem;"></p>
+      </div>
+      <p style="font-size:0.78rem;font-weight:700;color:#374151;margin-bottom:0.75rem;">What would you like to do next?</p>
+      <div style="display:flex;flex-direction:column;gap:0.65rem;">
+        <button type="button" onclick="continueToRegistration()"
+          style="display:flex;align-items:center;gap:0.75rem;padding:0.9rem 1rem;border-radius:0.65rem;border:2px solid #5B45E8;background:#faf9ff;cursor:pointer;text-align:left;"
+          onmouseover="this.style.background='#ede9fe'" onmouseout="this.style.background='#faf9ff'">
+          <span style="font-size:1.2rem;flex-shrink:0;">&#x1F4CB;</span>
+          <div>
+            <div style="font-weight:800;font-size:0.85rem;color:#1e293b;">Continue Registration Now</div>
+            <div style="font-size:0.7rem;color:#64748b;">Complete participant info here (Sections A + B)</div>
+          </div>
+        </button>
+        <button type="button" onclick="continueToRegistrationWithCapacity()"
+          style="display:flex;align-items:center;gap:0.75rem;padding:0.9rem 1rem;border-radius:0.65rem;border:2px solid #7c3aed;background:#faf5ff;cursor:pointer;text-align:left;"
+          onmouseover="this.style.background='#f3e8ff'" onmouseout="this.style.background='#faf5ff'">
+          <span style="font-size:1.2rem;flex-shrink:0;">&#x1F393;</span>
+          <div>
+            <div style="font-weight:800;font-size:0.85rem;color:#1e293b;">Add Training Info Too</div>
+            <div style="font-size:0.7rem;color:#64748b;">Registration + Capacity Building (Sections A + B + C)</div>
+          </div>
+        </button>
+        <button type="button" onclick="returnToWorkflowStart()"
+          style="display:flex;align-items:center;gap:0.75rem;padding:0.9rem 1rem;border-radius:0.65rem;border:1px solid #e2e8f0;background:#fff;cursor:pointer;text-align:left;"
+          onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+          <span style="font-size:1.2rem;flex-shrink:0;">&#x1F504;</span>
+          <div>
+            <div style="font-weight:800;font-size:0.85rem;color:#1e293b;">Done &mdash; Next Participant</div>
+            <div style="font-size:0.7rem;color:#64748b;">Reset and start a new consent</div>
+          </div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOCKED SCREEN (kept for backward compat with token links) -->
   <div id="lockedScreen" class="hidden" style="text-align:center;padding:3rem 1rem;">
     <div style="font-size:3rem;">&#x1F512;</div>
-    <h2 style="font-weight:900;font-size:1.25rem;margin:1rem 0 0.5rem;">Access Required</h2>
-    <p style="color:#64748b;font-size:0.875rem;margin-bottom:1.5rem;">This page requires a valid consent link or admin access to continue.</p>
-    <p style="color:#94a3b8;font-size:0.75rem;">If you were sent a link, please use that link to access this form.</p>
+    <h2 style="font-weight:900;font-size:1.25rem;margin:1rem 0 0.5rem;">Invalid Link</h2>
+    <p style="color:#64748b;font-size:0.875rem;margin-bottom:1.5rem;">This link is invalid or has expired. Please contact your HAPPY Program field officer.</p>
+    <button type="button" onclick="showEntryModeScreen()" style="font-size:0.8rem;color:#5B45E8;background:none;border:none;cursor:pointer;text-decoration:underline;">Go to entry screen</button>
   </div>
 
   <!-- ADMIN STAGE SELECTION SCREEN -->
@@ -203,6 +314,65 @@
 
   <!-- FORM VIEW -->
   <div id="view-form">
+
+    <!-- CONSENT STEP (shown when collector taps "New Participant") -->
+    <section id="consentStep" class="consent-step hidden">
+      <div class="form-section consent-section">
+        <div class="section-header">
+          <h2 class="section-title"><span class="section-badge">C</span> Participant Consent</h2>
+          <button type="button" class="btn-secondary" onclick="backToEntryChoice()">&#x2190; Back</button>
+        </div>
+        <div class="consent-intro">
+          <strong>HAPPY Program</strong> collects participant data to support training, placement, reporting, and program improvement. Consent is required before registration.
+        </div>
+        <div class="consent-text-box">
+          <h3>Purpose</h3>
+          <p>We collect personal data to analyse program progress, improve services, and monitor the effectiveness of the Harnessing Agricultural Productivity and Prosperity for Youth program.</p>
+          <h3>Data Collected</h3>
+          <ul>
+            <li>Name, age, gender, contact details, education, location, participation details, CV status, and employability information.</li>
+            <li>Refugee/displaced status, disability status, training details, and job placement details where applicable.</li>
+          </ul>
+          <h3>Data Sharing</h3>
+          <p>Data may be shared with Jobberman Ghana, Agri-Impact Limited, funding partners, and approved data processors for monitoring, evaluation, and program delivery.</p>
+          <h3>Your Rights</h3>
+          <p>You may request access, correction, restriction, or withdrawal of consent where applicable. Privacy Policy: <a href="https://mastercardfdn.org/privacy/" target="_blank" rel="noopener">mastercardfdn.org/privacy</a></p>
+        </div>
+        <form id="consentForm" novalidate>
+          <div class="field-grid">
+            <div class="field-group">
+              <label class="field-label required">Venue / Location of Engagement</label>
+              <input type="text" id="consentVenue" class="field-input" required placeholder="e.g., Tamale Community Center">
+            </div>
+            <div class="field-group">
+              <label class="field-label required">Full Name</label>
+              <input type="text" id="consentName" class="field-input" required placeholder="Participant full name">
+            </div>
+            <div class="field-group">
+              <label class="field-label required">Phone Number</label>
+              <input type="tel" id="consentPhone" class="field-input" required placeholder="0244 111 111">
+            </div>
+            <div class="field-group">
+              <label class="field-label">Email (optional)</label>
+              <input type="email" id="consentEmail" class="field-input" placeholder="you@example.com">
+            </div>
+          </div>
+          <div class="consent-signature">
+            <label class="field-label required">Participant Signature</label>
+            <canvas id="consentSig" aria-label="Draw participant signature"></canvas>
+            <p>Use finger or mouse to sign above.</p>
+            <button type="button" class="btn-secondary" id="clearConsentSig">Clear Signature</button>
+          </div>
+          <label class="consent-checkline">
+            <input type="checkbox" id="consentAgree" required>
+            <span><strong>I agree</strong> to share my data as described above. I confirm I have read and understood this form.</span>
+          </label>
+          <div id="consentStatus" class="status-bar hidden"></div>
+          <button type="submit" id="consentSubmitBtn" class="btn-primary">Submit Consent and Continue &#x2192;</button>
+        </form>
+      </div>
+    </section>
+
     <form id="mainForm" onsubmit="handleSubmit(event)">
 
       <!-- SECTION A: SUBMISSION META -->

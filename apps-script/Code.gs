@@ -1,5 +1,6 @@
 // ─── SPREADSHEET IDs ────────────────────────────────────────────────────────
-const KOLLECT_SPREADSHEET_ID = '15wqqAiJIbw6lfzwZFG_fGiklG-jFMCCpQhkaWVtPSzA';
+const KOLLECT_SPREADSHEET_ID   = '15wqqAiJIbw6lfzwZFG_fGiklG-jFMCCpQhkaWVtPSzA';
+const CONSENT_SPREADSHEET_ID   = '1D_LyM6SQFp2GjU88ytXe1yPkePuPxM4OeI0lgpzs8O4';
 
 // ─── SHEET NAMES ─────────────────────────────────────────────────────────────
 const MASTER_SHEET_NAME              = 'Master';
@@ -9,12 +10,20 @@ const PARTICIPANT_INFO_SHEET_NAME    = 'Participant Information';
 const CAPACITY_BUILDING_SHEET_NAME   = 'Capacity Building / Training';
 const JOB_PLACEMENT_SHEET_NAME       = 'Job Placement';
 const PLACEMENT_BATCHES_SHEET_NAME   = 'Placement Batches';
+const CONSENT_TAB_NAME               = 'Consents';
 
 // ─── OTHER CONSTANTS ─────────────────────────────────────────────────────────
-const PARTICIPANT_PREFIX = 'HAPPY-2026-';
-const CV_UPLOAD_FOLDER   = '1WEqqBy9AvnzMAkd6dJBXeaO_IqnO1bSc';
-const BACKEND_VERSION    = '2026-05-25-kollect-only';
-const JSON_MIME          = ContentService.MimeType.JSON;
+const PARTICIPANT_PREFIX       = 'HAPPY-2026-';
+const CV_UPLOAD_FOLDER         = '1WEqqBy9AvnzMAkd6dJBXeaO_IqnO1bSc';
+const CONSENT_SIGNATURE_FOLDER = '1uczj5UbNUqY0-j6Rn7bosXO13LvvACmV';
+const BACKEND_VERSION          = '2026-06-02-unified';
+const JSON_MIME                = ContentService.MimeType.JSON;
+
+// ─── CONSENT LOG HEADERS ─────────────────────────────────────────────────────
+const CONSENT_LOG_HEADERS = [
+  'Consent ID', 'Timestamp', 'Venue of Engagement', 'Participant Name',
+  'Phone Number', 'Email', 'Accept to Participate', 'Language', 'Program', 'Signature'
+];
 
 // ─── HEADERS ─────────────────────────────────────────────────────────────────
 const MASTER_HEADERS = [
@@ -118,6 +127,7 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const action  = payload.action || 'saveParticipantInfo';
 
+    if (action === 'initConsent')                 return jsonResponse(initConsent(payload));
     if (action === 'getParticipantByToken')       return jsonResponse(getParticipantByToken(payload.token));
     if (action === 'getParticipantById')          return jsonResponse(getParticipantById(payload.participantId));
     if (action === 'getParticipantByLookup')      return jsonResponse(getParticipantByLookup(payload.query));
@@ -1342,6 +1352,224 @@ function runMigration() {
     actor:                'migration_2026'
   });
   Logger.log(JSON.stringify(result, null, 2));
+}
+
+// ─── CONSENT (merged from happy-consent-form) ────────────────────────────────
+function initConsent(payload) {
+  const now        = new Date().toISOString();
+  const rawToken   = createToken();
+  const tokenHash  = hashValue(rawToken);
+  const registrationUrl = buildRegistrationUrl(rawToken);
+  const consentId  = generateConsentId();
+  const phone      = normalizePhone(payload.phone);
+  const email      = normalizeEmail(payload.email);
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const existingRow = findParticipantRow(master, headers, { phone, email });
+
+  let participantId;
+  let rowIndex;
+  let existingConsentName = '';
+  let signatureFileUrl = '';
+
+  if (existingRow > 0) {
+    const existing = rowToObject(headers, master.getRange(existingRow, 1, 1, headers.length).getValues()[0]);
+    participantId      = existing.participantId;
+    existingConsentName = existing.consentName || '';
+    const sig = saveConsentSignatureToDrive(payload, participantId);
+    signatureFileUrl = sig.url;
+    updateRow(master, headers, existingRow, {
+      continuationTokenHash:      tokenHash,
+      continuationTokenCreatedAt: now,
+      consentStatus:              'complete',
+      consentSubmittedAt:         payload.timestamp || now,
+      consentSubmissionId:        consentId,
+      consentName:                payload.name  || '',
+      consentPhone:               phone,
+      consentEmail:               email,
+      consentVenue:               payload.venue || '',
+      consentSignatureFileUrl:    sig.url,
+      consentSignatureFileId:     sig.id,
+      consentSignatureFileName:   sig.name,
+      currentStage:               'registration',
+      lastUpdatedAt:              now,
+      lastUpdatedBy:              'participant',
+      participantPhoneNormalized: phone,
+      participantEmailNormalized: email
+    });
+    rowIndex = existingRow;
+  } else {
+    participantId = generateParticipantId(master, headers);
+    const sig = saveConsentSignatureToDrive(payload, participantId);
+    signatureFileUrl = sig.url;
+    const record = blankRecord(headers);
+    Object.assign(record, {
+      participantId,
+      continuationTokenHash:      tokenHash,
+      continuationTokenCreatedAt: now,
+      consentStatus:              'complete',
+      consentSubmittedAt:         payload.timestamp || now,
+      consentSubmissionId:        consentId,
+      consentName:                payload.name  || '',
+      consentPhone:               phone,
+      consentEmail:               email,
+      consentVenue:               payload.venue || '',
+      consentSignatureFileUrl:    sig.url,
+      consentSignatureFileId:     sig.id,
+      consentSignatureFileName:   sig.name,
+      participantInfoStatus:      'not_started',
+      capacityBuildingStatus:     'not_started',
+      jobPlacementStatus:         'not_started',
+      currentStage:               'registration',
+      lockedSections:             '',
+      cvStatus:                   'not_started',
+      lastUpdatedAt:              now,
+      lastUpdatedBy:              'participant',
+      createdAt:                  now,
+      createdBy:                  'consent',
+      participantPhoneNormalized: phone,
+      participantEmailNormalized: email
+    });
+    master.appendRow(headers.map(h => toSheetValue(record[h] || '')));
+    rowIndex = master.getLastRow();
+  }
+
+  appendToConsentLog(payload, consentId, participantId, signatureFileUrl);
+
+  appendAudit({
+    participantId,
+    actorType: 'participant',
+    actor:     payload.name || phone || 'participant',
+    action:    'initConsent',
+    section:   'consent',
+    notes:     payload.venue || ''
+  });
+
+  const emailResult = sendConsentParticipantEmail({
+    participantId,
+    token:               rawToken,
+    registrationUrl,
+    consentSubmissionId: consentId,
+    name:                payload.name || '',
+    email
+  });
+
+  updateRow(master, headers, rowIndex, {
+    consentEmailSent:      emailResult.sent ? 'yes' : (email ? 'no' : ''),
+    consentEmailSentAt:    emailResult.sent ? new Date().toISOString() : '',
+    consentEmailSendError: emailResult.error || ''
+  });
+
+  if (emailResult.sent || emailResult.error) {
+    appendAudit({
+      participantId,
+      actorType: 'system',
+      actor:     'apps-script',
+      action:    emailResult.sent ? 'sendConsentEmail' : 'sendConsentEmailFailed',
+      section:   'consent',
+      notes:     emailResult.sent ? email : emailResult.error
+    });
+  }
+
+  return {
+    status:             'OK',
+    participantId,
+    token:              rawToken,
+    registrationUrl,
+    emailSent:          emailResult.sent,
+    existingConsentName
+  };
+}
+
+function getConsentLogSheet() {
+  const ss = SpreadsheetApp.openById(CONSENT_SPREADSHEET_ID);
+  return ss.getSheetByName(CONSENT_TAB_NAME) || ss.getSheets()[0];
+}
+
+function appendToConsentLog(payload, consentId, participantId, signatureFileUrl) {
+  try {
+    const sheet = getConsentLogSheet();
+    ensureHeaders(sheet, CONSENT_LOG_HEADERS);
+    const row = sheet.getLastRow() + 1;
+    sheet.appendRow([
+      consentId,
+      payload.timestamp || new Date().toISOString(),
+      payload.venue     || '',
+      payload.name      || '',
+      payload.phone     || '',
+      payload.email     || '',
+      'Yes',
+      payload.language  || 'en',
+      'HAPPY Program',
+      ''
+    ]);
+    if (signatureFileUrl) {
+      sheet.getRange(row, 10).setFormula('=HYPERLINK("' + signatureFileUrl + '","View")');
+    }
+  } catch (_) {}
+}
+
+function saveConsentSignatureToDrive(payload, participantId) {
+  try {
+    const match = String(payload.signature || '').match(/^data:image\/png;base64,(.+)$/);
+    if (!match) return { id: '', url: '', name: '' };
+    const bytes    = Utilities.base64Decode(match[1]);
+    const safeName = sanitizeFileName(payload.name || participantId || 'participant');
+    const fileName = `${participantId}_${new Date().toISOString().replace(/[:.]/g, '-')}_${safeName}_consent-signature.png`;
+    const blob     = Utilities.newBlob(bytes, 'image/png', fileName);
+    const folder   = DriveApp.getFolderById(CONSENT_SIGNATURE_FOLDER);
+    const file     = folder.createFile(blob);
+    return { id: file.getId(), url: file.getUrl(), name: file.getName() };
+  } catch (_) {
+    return { id: '', url: '', name: '' };
+  }
+}
+
+function sendConsentParticipantEmail(details) {
+  if (!details.email) return { sent: false, error: '' };
+  try {
+    const name = details.name ? ` ${details.name}` : '';
+    MailApp.sendEmail({
+      to:      details.email,
+      subject: 'Your HAPPY Program Consent Confirmation',
+      body: [
+        `Hello${name},`,
+        '',
+        'Thank you for giving your consent to participate in the HAPPY Program.',
+        '',
+        'Here are your details — please keep them safe:',
+        '',
+        `  Consent ID:     ${details.consentSubmissionId}`,
+        `  Participant ID: ${details.participantId}`,
+        '',
+        'Click the link below to complete your registration:',
+        '',
+        `  ${details.registrationUrl}`,
+        '',
+        'If you have any questions, please contact your HAPPY Program field officer.',
+        '',
+        'Regards,',
+        'HAPPY Program Team'
+      ].join('\n'),
+      name: 'HAPPY Program'
+    });
+    return { sent: true, error: '' };
+  } catch (err) {
+    return { sent: false, error: err.message };
+  }
+}
+
+function buildRegistrationUrl(token) {
+  return 'https://murphy-richard.github.io/happy-kollekt/?token=' + encodeURIComponent(token);
+}
+
+function createToken() {
+  return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+}
+
+function generateConsentId() {
+  return 'HAPPY-' + Utilities.getUuid().replace(/-/g, '').slice(0, 8).toUpperCase();
 }
 
 // ─── DRIVE AUTH HELPER ────────────────────────────────────────────────────────
