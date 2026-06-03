@@ -1287,7 +1287,16 @@
           </div>
         </div>
 
-        <div id="batchParticipantList" style="max-height:420px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:0.5rem;"></div>
+        <!-- Search box -->
+        <div style="position:relative;margin-bottom:0.6rem;">
+          <span style="position:absolute;left:0.7rem;top:50%;transform:translateY(-50%);font-size:0.85rem;color:#94a3b8;pointer-events:none;">&#x1F50D;</span>
+          <input type="text" id="batchSearchInput" placeholder="Search by name or HAPPY ID…"
+            style="width:100%;padding:0.6rem 0.75rem 0.6rem 2.1rem;border:1.5px solid #e2e8f0;border-radius:0.5rem;font-size:0.82rem;box-sizing:border-box;"
+            oninput="batchSearchParticipants(this.value)">
+        </div>
+        <div id="batchSearchInfo" style="font-size:0.7rem;color:#94a3b8;margin-bottom:0.4rem;min-height:1rem;"></div>
+
+        <div id="batchParticipantList" style="max-height:380px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:0.5rem;"></div>
 
         <div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:#f8fafc;border-radius:0.5rem;display:flex;justify-content:space-between;align-items:center;">
           <span id="batchSelectedCount" style="font-size:0.78rem;font-weight:700;color:#374151;">0 selected</span>

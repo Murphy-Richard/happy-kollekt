@@ -2909,11 +2909,16 @@ async function saveEditModal() {
 let batchDetails = {};
 let batchEligible = [];
 let batchSelectedIds = new Set();
+let batchSearchTerm = '';
 
 function loadBatchPlacement() {
   batchDetails = {};
   batchEligible = [];
   batchSelectedIds = new Set();
+  batchSearchTerm = '';
+  const searchInput = document.getElementById('batchSearchInput');
+  if (searchInput) searchInput.value = '';
+  document.getElementById('batchSearchInfo') && (document.getElementById('batchSearchInfo').textContent = '');
   showBatchStep(1);
   // Populate region dropdown once
   const sel = document.getElementById('batchRegion');
@@ -3062,29 +3067,60 @@ function batchGoToStep3() {
   showBatchStep(3);
 }
 
+// ── Search ──
+function batchSearchParticipants(query) {
+  batchSearchTerm = (query || '').trim().toLowerCase();
+  renderBatchParticipantList();
+}
+
 // ── Participant list ──
 function renderBatchParticipantList() {
   const list    = document.getElementById('batchParticipantList');
   const countEl = document.getElementById('batchEligibleCount');
+  const infoEl  = document.getElementById('batchSearchInfo');
   if (!batchEligible.length) {
     list.innerHTML = '<p style="text-align:center;padding:2rem;color:#94a3b8;font-size:0.82rem;">No participants are currently eligible.<br><small>Participants must have completed capacity building and not yet been placed.</small></p>';
     countEl.textContent = '0 eligible participants';
+    if (infoEl) infoEl.textContent = '';
     return;
   }
   countEl.textContent = batchEligible.length + ' participant(s) eligible for placement';
-  list.innerHTML = batchEligible.map(p => `
+
+  // Filter by search term if present
+  const visible = batchSearchTerm
+    ? batchEligible.filter(p => {
+        const name = ((p.surname || '') + ' ' + (p.firstName || '')).toLowerCase();
+        const id   = (p.participantId || '').toLowerCase();
+        return name.includes(batchSearchTerm) || id.includes(batchSearchTerm);
+      })
+    : batchEligible;
+
+  if (infoEl) {
+    infoEl.textContent = batchSearchTerm
+      ? `${visible.length} of ${batchEligible.length} shown — selections outside filter are kept`
+      : '';
+  }
+
+  if (!visible.length) {
+    list.innerHTML = `<p style="text-align:center;padding:1.5rem;color:#94a3b8;font-size:0.82rem;">No participants match "<strong>${escapeHtml(batchSearchTerm)}</strong>"</p>`;
+    updateBatchSelectedCount();
+    return;
+  }
+
+  list.innerHTML = visible.map(p => `
     <label style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 0.75rem;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background 0.1s;"
            onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
       <input type="checkbox" value="${escapeHtml(p.participantId)}"
              onchange="batchToggleParticipant(this.value, this.checked)"
-             style="width:1rem;height:1rem;accent-color:#10b981;flex-shrink:0;">
+             ${batchSelectedIds.has(p.participantId) ? 'checked' : ''}
+             style="width:1.1rem;height:1.1rem;accent-color:#10b981;flex-shrink:0;">
       <div style="flex:1;min-width:0;">
-        <div style="font-weight:700;font-size:0.8rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</div>
-        <div style="font-size:0.67rem;color:#64748b;font-family:monospace;">${escapeHtml(p.participantId)}</div>
+        <div style="font-weight:700;font-size:0.82rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</div>
+        <div style="font-size:0.68rem;color:#5B45E8;font-family:monospace;margin-top:0.1rem;">${escapeHtml(p.participantId)}</div>
       </div>
       <div style="text-align:right;flex-shrink:0;">
-        <div style="font-size:0.68rem;color:#64748b;">${escapeHtml(p.sex || '')} &bull; Age ${escapeHtml(String(p.age || '?'))}</div>
-        <div style="font-size:0.62rem;color:#94a3b8;">${escapeHtml(p.region || '')}</div>
+        <div style="font-size:0.7rem;color:#64748b;">${escapeHtml(p.sex || '')} &bull; Age ${escapeHtml(String(p.age || '?'))}</div>
+        <div style="font-size:0.65rem;color:#94a3b8;">${escapeHtml(p.region || '')}</div>
       </div>
     </label>
   `).join('');
@@ -3098,7 +3134,15 @@ function batchToggleParticipant(id, checked) {
 }
 
 function batchSelectAll(select) {
-  batchEligible.forEach(p => select ? batchSelectedIds.add(p.participantId) : batchSelectedIds.delete(p.participantId));
+  // Select/clear applies to currently visible (filtered) participants only
+  const visible = batchSearchTerm
+    ? batchEligible.filter(p => {
+        const name = ((p.surname || '') + ' ' + (p.firstName || '')).toLowerCase();
+        const id   = (p.participantId || '').toLowerCase();
+        return name.includes(batchSearchTerm) || id.includes(batchSearchTerm);
+      })
+    : batchEligible;
+  visible.forEach(p => select ? batchSelectedIds.add(p.participantId) : batchSelectedIds.delete(p.participantId));
   document.querySelectorAll('#batchParticipantList input[type="checkbox"]').forEach(cb => { cb.checked = select; });
   updateBatchSelectedCount();
 }
