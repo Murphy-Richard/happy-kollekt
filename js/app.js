@@ -2725,6 +2725,51 @@ function loadCorrection() {
     '<p style="font-size:0.78rem;color:#94a3b8;">No data loaded — click Refresh.</p>';
 }
 
+async function previewRemoveBulkImport() {
+  if (!formState.isAdmin) return;
+  const btn = document.getElementById('removeBulkBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  try {
+    const result = await apiAction('previewBulkImportedRecords', {
+      adminPassword: formState.adminPassword
+    });
+    if (result.count === 0) {
+      showToast('No bulk-imported records found on the Master sheet.', 'info');
+      return;
+    }
+    // Show confirmation with count before deleting
+    const confirmed = window.confirm(
+      `Found ${result.count} bulk-imported record(s) out of ${result.total} total.\n\n` +
+      `This will permanently delete them from the Master sheet and all sub-sheets ` +
+      `(Participant Information, Job Placement, Capacity Building).\n\n` +
+      `This cannot be undone. Continue?`
+    );
+    if (!confirmed) return;
+    await runRemoveBulkImport(result.count);
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Remove Bulk Import Data'; }
+  }
+}
+
+async function runRemoveBulkImport(expectedCount) {
+  const btn = document.getElementById('removeBulkBtn');
+  if (btn) { btn.disabled = true; btn.textContent = `Deleting ${expectedCount} records…`; }
+  try {
+    const result = await apiAction('removeBulkImportedRecords', {
+      adminPassword: formState.adminPassword
+    });
+    showToast(result.message || `Removed ${result.removed} bulk-imported records.`, 'success');
+    // Reload master data
+    await loadSheetData({ silent: true });
+  } catch (err) {
+    showToast('Delete failed: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Remove Bulk Import Data'; }
+  }
+}
+
 async function runNormalizeAllRecords() {
   if (!formState.isAdmin) return;
   const btn = document.getElementById('normalizeBtn');

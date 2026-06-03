@@ -144,7 +144,9 @@ function doPost(e) {
     if (action === 'getEligibleForPlacement')     return jsonResponse(getEligibleForPlacement(payload.adminPassword));
     if (action === 'submitPlacementBatch')        return jsonResponse(submitPlacementBatch(payload));
     if (action === 'bulkSetPartner')              return jsonResponse(bulkSetPartner(payload));
-    if (action === 'normalizeExistingRecords')   return jsonResponse(normalizeExistingRecords(payload.adminPassword));
+    if (action === 'normalizeExistingRecords')     return jsonResponse(normalizeExistingRecords(payload.adminPassword));
+    if (action === 'previewBulkImportedRecords')  return jsonResponse(previewBulkImportedRecords(payload.adminPassword));
+    if (action === 'removeBulkImportedRecords')   return jsonResponse(removeBulkImportedRecords(payload.adminPassword));
 
     throw new Error('Unsupported action: ' + action);
   } catch (err) {
@@ -1713,5 +1715,116 @@ function normalizeExistingRecords(password) {
 function runNormalizeExistingRecords() {
   const pwd    = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
   const result = normalizeExistingRecords(pwd);
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
+// ─── REMOVE BULK-IMPORTED RECORDS ────────────────────────────────────────────
+// Identifies bulk-imported rows by any of: createdBy='bulk_import',
+// syncStatus='migrated', or legacyParticipantId non-empty.
+// Deletes matched rows from Master and all sub-sheets.
+function removeBulkImportedRecords(password) {
+  const pwd = getAdminPassword();
+  if (!pwd || password !== pwd) throw new Error('Admin access required.');
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  if (master.getLastRow() < 2) return { status: 'OK', removed: 0, total: 0 };
+
+  const rows        = master.getRange(2, 1, master.getLastRow() - 1, headers.length).getValues();
+  const idxCreated  = headers.indexOf('createdBy');
+  const idxSync     = headers.indexOf('syncStatus');
+  const idxLegacy   = headers.indexOf('legacyParticipantId');
+  const idxPid      = headers.indexOf('participantId');
+
+  // Collect (in reverse order so deleteRow indices stay valid)
+  const toDelete    = [];
+  const migratedIds = new Set();
+
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var r          = rows[i];
+    var createdBy  = String(r[idxCreated]  || '').trim();
+    var syncStatus = String(r[idxSync]     || '').trim();
+    var legacyId   = String(r[idxLegacy]   || '').trim();
+    var isBulk     = createdBy === 'bulk_import'
+                  || syncStatus === 'migrated'
+                  || legacyId !== '';
+    if (isBulk) {
+      toDelete.push(i + 2); // sheet row (1-based + header)
+      var pid = String(r[idxPid] || '').trim();
+      if (pid) migratedIds.add(pid);
+    }
+  }
+
+  // Delete from Master (already reversed)
+  toDelete.forEach(function(rowIndex) { master.deleteRow(rowIndex); });
+
+  // Clean up sub-sheets
+  var ss = SpreadsheetApp.openById(KOLLECT_SPREADSHEET_ID);
+  [PARTICIPANT_INFO_SHEET_NAME, JOB_PLACEMENT_SHEET_NAME, CAPACITY_BUILDING_SHEET_NAME]
+    .forEach(function(name) {
+      var sheet = ss.getSheetByName(name);
+      if (!sheet || sheet.getLastRow() < 2) return;
+      var lastCol    = sheet.getLastColumn();
+      var subHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      var pidCol     = subHeaders.findIndex(function(h) {
+        return String(h).toUpperCase().trim() === 'PARTICIPANT ID';
+      });
+      if (pidCol < 0) return;
+      var subRows    = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
+      var subToDelete = [];
+      for (var j = subRows.length - 1; j >= 0; j--) {
+        if (migratedIds.has(String(subRows[j][pidCol] || '').trim())) {
+          subToDelete.push(j + 2);
+        }
+      }
+      subToDelete.forEach(function(ri) { sheet.deleteRow(ri); });
+    });
+
+  appendAudit({
+    participantId: '',
+    actorType:     'staff',
+    actor:         'admin',
+    action:        'removeBulkImportedRecords',
+    section:       'admin',
+    notes:         'Removed ' + toDelete.length + ' bulk-imported records. IDs: '
+                   + Array.from(migratedIds).slice(0, 10).join(', ')
+                   + (migratedIds.size > 10 ? '…' : '')
+  });
+
+  return {
+    status:  'OK',
+    removed: toDelete.length,
+    total:   rows.length,
+    message: 'Removed ' + toDelete.length + ' bulk-imported record(s) from Master and sub-sheets.'
+  };
+}
+
+// Preview only — returns count without deleting anything
+function previewBulkImportedRecords(password) {
+  const pwd = getAdminPassword();
+  if (!pwd || password !== pwd) throw new Error('Admin access required.');
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  if (master.getLastRow() < 2) return { status: 'OK', count: 0 };
+
+  const rows       = master.getRange(2, 1, master.getLastRow() - 1, headers.length).getValues();
+  const idxCreated = headers.indexOf('createdBy');
+  const idxSync    = headers.indexOf('syncStatus');
+  const idxLegacy  = headers.indexOf('legacyParticipantId');
+
+  var count = rows.filter(function(r) {
+    return String(r[idxCreated] || '') === 'bulk_import'
+        || String(r[idxSync]    || '') === 'migrated'
+        || String(r[idxLegacy]  || '').trim() !== '';
+  }).length;
+
+  return { status: 'OK', count: count, total: rows.length };
+}
+
+// Run directly from Apps Script editor
+function runRemoveBulkImportedRecords() {
+  const pwd    = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
+  const result = removeBulkImportedRecords(pwd);
   Logger.log(JSON.stringify(result, null, 2));
 }
