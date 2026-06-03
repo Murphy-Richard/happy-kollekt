@@ -1038,19 +1038,22 @@ function getEligibleForPlacement(password) {
   const records = getRecords(master, headers);
   const eligible = records
     .filter(function(r) {
-      return r.capacityBuildingStatus === 'submitted' && r.jobPlacementStatus === 'not_started';
+      // Include all registered participants who have not yet been placed
+      return r.participantInfoStatus === 'submitted' && r.jobPlacementStatus !== 'submitted';
     })
     .map(function(r) {
       return {
-        participantId:   r.participantId   || '',
-        surname:         r.surname         || '',
-        firstName:       r.firstName       || '',
-        sex:             r.sex             || '',
-        age:             r.age             || '',
-        region:          r.region          || '',
-        district:        r.district        || '',
-        telephone:       r.telephone       || '',
-        modules:         r.modules         || ''
+        participantId:        r.participantId        || '',
+        surname:              r.surname              || '',
+        firstName:            r.firstName            || '',
+        sex:                  r.sex                  || '',
+        age:                  r.age                  || '',
+        region:               r.region               || '',
+        district:             r.district             || '',
+        telephone:            r.telephone            || '',
+        implementingPartner:  r.implementingPartner  || '',
+        capacityStatus:       r.capacityBuildingStatus || 'not_started',
+        modules:              r.modules              || ''
       };
     });
   return { status: 'OK', eligible: eligible, count: eligible.length };

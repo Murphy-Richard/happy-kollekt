@@ -3079,12 +3079,12 @@ function renderBatchParticipantList() {
   const countEl = document.getElementById('batchEligibleCount');
   const infoEl  = document.getElementById('batchSearchInfo');
   if (!batchEligible.length) {
-    list.innerHTML = '<p style="text-align:center;padding:2rem;color:#94a3b8;font-size:0.82rem;">No participants are currently eligible.<br><small>Participants must have completed capacity building and not yet been placed.</small></p>';
-    countEl.textContent = '0 eligible participants';
+    list.innerHTML = '<p style="text-align:center;padding:2rem;color:#94a3b8;font-size:0.82rem;">No registered participants found who have not yet been placed.</p>';
+    countEl.textContent = '0 participants loaded';
     if (infoEl) infoEl.textContent = '';
     return;
   }
-  countEl.textContent = batchEligible.length + ' participant(s) eligible for placement';
+  countEl.textContent = batchEligible.length + ' participant(s) — search to filter, select to add to batch';
 
   // Filter by search term if present
   const visible = batchSearchTerm
@@ -3107,7 +3107,9 @@ function renderBatchParticipantList() {
     return;
   }
 
-  list.innerHTML = visible.map(p => `
+  list.innerHTML = visible.map(p => {
+    const trained = p.capacityStatus === 'submitted';
+    return `
     <label style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 0.75rem;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background 0.1s;"
            onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
       <input type="checkbox" value="${escapeHtml(p.participantId)}"
@@ -3115,15 +3117,19 @@ function renderBatchParticipantList() {
              ${batchSelectedIds.has(p.participantId) ? 'checked' : ''}
              style="width:1.1rem;height:1.1rem;accent-color:#10b981;flex-shrink:0;">
       <div style="flex:1;min-width:0;">
-        <div style="font-weight:700;font-size:0.82rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</div>
+        <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;">
+          <span style="font-weight:700;font-size:0.82rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</span>
+          ${trained ? `<span style="font-size:0.6rem;padding:0.1rem 0.4rem;border-radius:999px;background:#dcfce7;color:#166534;font-weight:700;">Trained</span>` : ''}
+        </div>
         <div style="font-size:0.68rem;color:#5B45E8;font-family:monospace;margin-top:0.1rem;">${escapeHtml(p.participantId)}</div>
+        ${p.implementingPartner ? `<div style="font-size:0.63rem;color:#94a3b8;margin-top:0.1rem;">${escapeHtml(p.implementingPartner)}</div>` : ''}
       </div>
       <div style="text-align:right;flex-shrink:0;">
         <div style="font-size:0.7rem;color:#64748b;">${escapeHtml(p.sex || '')} &bull; Age ${escapeHtml(String(p.age || '?'))}</div>
         <div style="font-size:0.65rem;color:#94a3b8;">${escapeHtml(p.region || '')}</div>
       </div>
-    </label>
-  `).join('');
+    </label>`
+  }).join('');
   updateBatchSelectedCount();
 }
 
