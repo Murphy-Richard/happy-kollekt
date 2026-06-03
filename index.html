@@ -1052,7 +1052,14 @@
           <h2 class="font-black text-red-800 uppercase text-xs tracking-widest">&#x1F6E0; Data Correction &amp; Cleaning</h2>
           <p style="font-size:0.7rem;color:#94a3b8;margin-top:0.2rem;">Review and fix data quality issues, retry pending submissions, edit participant records.</p>
         </div>
-        <button onclick="refreshCorrection()" class="bg-red-600 text-white text-[10px] px-3 py-1 rounded font-bold no-print">&#x1F504; Refresh</button>
+        <div style="display:flex;gap:0.4rem;">
+          <button onclick="runNormalizeAllRecords()" id="normalizeBtn"
+            style="font-size:0.62rem;padding:0.3rem 0.6rem;background:#7c3aed;color:#fff;border:none;border-radius:0.35rem;cursor:pointer;font-weight:700;"
+            title="Standardise phone numbers (0244…) and names (Title Case) on all Master records">
+            &#x2728; Standardise Names &amp; Phones
+          </button>
+          <button onclick="refreshCorrection()" class="bg-red-600 text-white text-[10px] px-3 py-1 rounded font-bold no-print">&#x1F504; Refresh</button>
+        </div>
       </div>
 
       <!-- PENDING SYNC PANEL -->

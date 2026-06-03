@@ -2725,6 +2725,24 @@ function loadCorrection() {
     '<p style="font-size:0.78rem;color:#94a3b8;">No data loaded — click Refresh.</p>';
 }
 
+async function runNormalizeAllRecords() {
+  if (!formState.isAdmin) return;
+  const btn = document.getElementById('normalizeBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  try {
+    const result = await apiAction('normalizeExistingRecords', {
+      adminPassword: formState.adminPassword
+    });
+    showToast(`Standardised ${result.updated} of ${result.total} records.`, 'success');
+    // Reload master data so dashboard/report reflect the changes
+    await loadSheetData({ silent: true });
+  } catch (err) {
+    showToast('Standardisation failed: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Standardise Names & Phones'; }
+  }
+}
+
 function refreshCorrection() {
   if (!formState.isAdmin) return;
   document.getElementById('pendingQueueList').textContent = 'Refreshing…';

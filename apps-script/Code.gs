@@ -144,6 +144,7 @@ function doPost(e) {
     if (action === 'getEligibleForPlacement')     return jsonResponse(getEligibleForPlacement(payload.adminPassword));
     if (action === 'submitPlacementBatch')        return jsonResponse(submitPlacementBatch(payload));
     if (action === 'bulkSetPartner')              return jsonResponse(bulkSetPartner(payload));
+    if (action === 'normalizeExistingRecords')   return jsonResponse(normalizeExistingRecords(payload.adminPassword));
 
     throw new Error('Unsupported action: ' + action);
   } catch (err) {
@@ -382,6 +383,9 @@ function saveParticipantInfo(payload, explicitSection) {
     participantEmailNormalized: email || existing.participantEmailNormalized || '',
     ghanaCardNormalized:        ghanaCard || existing.ghanaCardNormalized || ''
   });
+
+  // Apply display normalisations: local phone format + Title Case names
+  normaliseRecordFields(record);
 
   if (isNew) {
     master.appendRow(headers.map(h => toSheetValue(record[h] || '')));
@@ -1598,4 +1602,116 @@ function authorizeDriveAccess() {
   const test   = folder.createFile(Utilities.newBlob('auth-test', 'text/plain', 'auth-test.txt'));
   test.setTrashed(true);
   return 'Drive access OK: ' + folder.getName();
+}
+
+// ─── DATA NORMALISATION ───────────────────────────────────────────────────────
+
+// Convert any stored phone format to local Ghana format: 0244111111 (10 digits)
+function toLocalPhone(value) {
+  const d = String(value || '').replace(/\D+/g, '');
+  if (!d) return String(value || '');
+  if (d.length === 12 && d.startsWith('233')) return '0' + d.slice(3);
+  if (d.length === 10 && d.startsWith('0'))   return d;
+  if (d.length === 9)                          return '0' + d;
+  return String(value || ''); // unrecognised format — leave unchanged
+}
+
+// Title-case a name: "miriam asante" → "Miriam Asante"
+function toTitleCase(str) {
+  return String(str || '').trim()
+    .toLowerCase()
+    .replace(/\b([a-z])/g, function(c) { return c.toUpperCase(); });
+}
+
+// Normalise a new record's display phone and name fields before writing to sheet.
+// Called at the end of saveParticipantInfo for every new submission.
+function normaliseRecordFields(record) {
+  var phoneFields = ['telephone', 'consentPhone'];
+  phoneFields.forEach(function(f) {
+    if (record[f]) record[f] = toLocalPhone(record[f]);
+  });
+  var nameFields = ['surname', 'firstName', 'otherNames', 'consentName',
+                    'currentOccupation', 'currentEmployer'];
+  nameFields.forEach(function(f) {
+    if (record[f]) record[f] = toTitleCase(record[f]);
+  });
+  return record;
+}
+
+// ─── CLEANUP PASS — normalise ALL existing Master records ────────────────────
+// Exposed via doPost (requires admin password) and runnable from the editor.
+function normalizeExistingRecords(password) {
+  const pwd = getAdminPassword();
+  if (!pwd || password !== pwd) throw new Error('Admin access required.');
+
+  const master  = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  if (master.getLastRow() < 2) return { status: 'OK', updated: 0, total: 0 };
+
+  const rows = master.getRange(2, 1, master.getLastRow() - 1, headers.length).getValues();
+  const idx  = {};
+  headers.forEach(function(h, i) { idx[h] = i; });
+  const now  = new Date().toISOString();
+
+  const PHONE_FIELDS = ['telephone', 'consentPhone'];
+  const NAME_FIELDS  = ['surname', 'firstName', 'otherNames', 'consentName',
+                        'currentOccupation', 'currentEmployer'];
+
+  var updated = 0;
+  var updatedRows = [];
+
+  for (var r = 0; r < rows.length; r++) {
+    var row      = rows[r].slice(); // copy so we can compare
+    var original = rows[r].slice();
+    var changed  = false;
+
+    PHONE_FIELDS.forEach(function(f) {
+      var i = idx[f];
+      if (i === undefined) return;
+      var raw = String(row[i] || '').trim();
+      if (!raw) return;
+      var fixed = toLocalPhone(raw);
+      if (fixed !== raw) { row[i] = fixed; changed = true; }
+    });
+
+    NAME_FIELDS.forEach(function(f) {
+      var i = idx[f];
+      if (i === undefined) return;
+      var raw = String(row[i] || '').trim();
+      if (!raw) return;
+      var fixed = toTitleCase(raw);
+      if (fixed !== raw) { row[i] = fixed; changed = true; }
+    });
+
+    if (changed) {
+      if (idx['lastUpdatedAt'] !== undefined) row[idx['lastUpdatedAt']] = now;
+      if (idx['lastUpdatedBy'] !== undefined) row[idx['lastUpdatedBy']] = 'normalize_script';
+      updatedRows.push({ rowIndex: r + 2, values: row });
+      updated++;
+    }
+  }
+
+  // Write updates individually to avoid touching unchanged rows
+  updatedRows.forEach(function(u) {
+    master.getRange(u.rowIndex, 1, 1, headers.length).setValues([u.values]);
+  });
+
+  appendAudit({
+    participantId: '',
+    actorType: 'staff',
+    actor:     'normalize_script',
+    action:    'normalizeExistingRecords',
+    section:   'admin',
+    notes:     'Updated ' + updated + ' of ' + rows.length + ' records'
+  });
+
+  return { status: 'OK', updated: updated, total: rows.length,
+           message: 'Normalised ' + updated + ' of ' + rows.length + ' records.' };
+}
+
+// Run directly from Apps Script editor: Run → runNormalizeExistingRecords
+function runNormalizeExistingRecords() {
+  const pwd    = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
+  const result = normalizeExistingRecords(pwd);
+  Logger.log(JSON.stringify(result, null, 2));
 }
