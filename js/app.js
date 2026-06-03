@@ -3086,12 +3086,21 @@ function renderBatchParticipantList() {
   }
   countEl.textContent = batchEligible.length + ' participant(s) — search to filter, select to add to batch';
 
-  // Filter by search term if present
+  // Filter by search term if present — checks all name fields + ID + phone
   const visible = batchSearchTerm
     ? batchEligible.filter(p => {
-        const name = ((p.surname || '') + ' ' + (p.firstName || '')).toLowerCase();
-        const id   = (p.participantId || '').toLowerCase();
-        return name.includes(batchSearchTerm) || id.includes(batchSearchTerm);
+        const q = batchSearchTerm;
+        const surnameFirst  = ((p.surname || '') + ' ' + (p.firstName || '')).trim().toLowerCase();
+        const firstSurname  = ((p.firstName || '') + ' ' + (p.surname || '')).trim().toLowerCase();
+        const consentName   = (p.consentName  || '').toLowerCase();
+        const id            = (p.participantId || '').toLowerCase();
+        const phone         = (p.telephone    || '').replace(/\D/g, '');
+        const qDigits       = q.replace(/\D/g, '');
+        return surnameFirst.includes(q)
+            || firstSurname.includes(q)
+            || consentName.includes(q)
+            || id.includes(q)
+            || (qDigits.length >= 4 && phone.includes(qDigits));
       })
     : batchEligible;
 
@@ -3118,7 +3127,11 @@ function renderBatchParticipantList() {
              style="width:1.1rem;height:1.1rem;accent-color:#10b981;flex-shrink:0;">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;">
-          <span style="font-weight:700;font-size:0.82rem;color:#1e293b;">${escapeHtml((p.surname || '') + ', ' + (p.firstName || ''))}</span>
+          <span style="font-weight:700;font-size:0.82rem;color:#1e293b;">${escapeHtml(
+            (p.surname || p.firstName)
+              ? (p.surname || '') + (p.surname && p.firstName ? ', ' : '') + (p.firstName || '')
+              : (p.consentName || '—')
+          )}</span>
           ${trained ? `<span style="font-size:0.6rem;padding:0.1rem 0.4rem;border-radius:999px;background:#dcfce7;color:#166534;font-weight:700;">Trained</span>` : ''}
         </div>
         <div style="font-size:0.68rem;color:#5B45E8;font-family:monospace;margin-top:0.1rem;">${escapeHtml(p.participantId)}</div>

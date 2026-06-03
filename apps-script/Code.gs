@@ -1046,11 +1046,12 @@ function getEligibleForPlacement(password) {
         participantId:        r.participantId        || '',
         surname:              r.surname              || '',
         firstName:            r.firstName            || '',
+        consentName:          r.consentName          || '',
         sex:                  r.sex                  || '',
         age:                  r.age                  || '',
         region:               r.region               || '',
         district:             r.district             || '',
-        telephone:            r.telephone            || '',
+        telephone:            r.telephone            || r.consentPhone || '',
         implementingPartner:  r.implementingPartner  || '',
         capacityStatus:       r.capacityBuildingStatus || 'not_started',
         modules:              r.modules              || ''
