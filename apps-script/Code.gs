@@ -1389,6 +1389,9 @@ function initConsent(payload) {
   const consentId  = generateConsentId();
   const phone      = normalizePhone(payload.phone);
   const email      = normalizeEmail(payload.email);
+  // Standardise name and phone to display format at point of consent
+  const consentName  = toTitleCase(payload.name  || '');
+  const consentPhone = toLocalPhone(phone || payload.phone || '');
 
   const master  = getMasterSheet();
   const headers = ensureHeaders(master, MASTER_HEADERS);
@@ -1411,8 +1414,8 @@ function initConsent(payload) {
       consentStatus:              'complete',
       consentSubmittedAt:         payload.timestamp || now,
       consentSubmissionId:        consentId,
-      consentName:                payload.name  || '',
-      consentPhone:               phone,
+      consentName:                consentName,
+      consentPhone:               consentPhone,
       consentEmail:               email,
       consentVenue:               payload.venue || '',
       consentSignatureFileUrl:    sig.url,
@@ -1437,8 +1440,8 @@ function initConsent(payload) {
       consentStatus:              'complete',
       consentSubmittedAt:         payload.timestamp || now,
       consentSubmissionId:        consentId,
-      consentName:                payload.name  || '',
-      consentPhone:               phone,
+      consentName:                consentName,
+      consentPhone:               consentPhone,
       consentEmail:               email,
       consentVenue:               payload.venue || '',
       consentSignatureFileUrl:    sig.url,
