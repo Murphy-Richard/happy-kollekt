@@ -59,6 +59,7 @@ let formState = {
   isSheetLoading: false,
   pendingAdminView: null,
   accessMode: null,  // 'token' | 'capacity-existing' | 'capacity-new' | 'admin'
+  entryMode:  null,  // 'registration' | 'capacity-new'
   consentName: '',   // stored when participant is loaded, used for name mismatch check
   // Consent step canvas state
   consentSigned: false,
@@ -104,15 +105,16 @@ function initializeFromUrlParams() {
   if (token) {
     unlockWithToken(token);
   } else if (mode === 'capacity') {
-    showCapacityEntryScreen();
+    showCapacityPickerScreen();
+  } else if (mode === 'consent') {
+    startNewParticipant();
   } else {
     showEntryModeScreen();
   }
 }
 
 function showEntryModeScreen() {
-  ['lockedScreen','entryModeScreen','continueScreen','consentSuccessScreen',
-   'capacityConsentScreen','capacityEntryScreen','adminStageScreen',
+  ['lockedScreen','entryModeScreen','continueScreen',   'capacityEntryScreen','adminStageScreen',
    'placementLookupScreen','registrationLookupScreen','view-form'].forEach(id => {
     document.getElementById(id)?.classList.add('hidden');
   });
@@ -177,8 +179,7 @@ async function submitContinue() {
 
 function showLockedScreen() {
   // Only shown when a token link is invalid/expired
-  ['entryModeScreen','continueScreen','consentSuccessScreen',
-   'capacityConsentScreen','capacityEntryScreen','view-form'].forEach(id => {
+  ['entryModeScreen','continueScreen',   'capacityEntryScreen','view-form'].forEach(id => {
     document.getElementById(id)?.classList.add('hidden');
   });
   document.getElementById('lockedScreen').classList.remove('hidden');
@@ -193,8 +194,7 @@ function startNewParticipant() {
 }
 
 function showConsentStep() {
-  ['entryModeScreen','continueScreen','consentSuccessScreen',
-   'capacityEntryScreen','capacityConsentScreen','view-form'].forEach(id => {
+  ['entryModeScreen','continueScreen',   'capacityEntryScreen','view-form'].forEach(id => {
     document.getElementById(id)?.classList.add('hidden');
   });
   document.getElementById('consentStep')?.classList.remove('hidden');
@@ -341,15 +341,6 @@ async function handleConsentSubmit(event) {
     formState.consentName = result.existingConsentName || payload.name;
     if (formState.token) localStorage.setItem('happyContinuationToken', formState.token);
 
-    // Show post-consent options — no redirect
-    document.getElementById('consentStep').classList.add('hidden');
-    document.getElementById('consentSuccessScreen').classList.remove('hidden');
-    document.getElementById('consentSuccessId').textContent   = result.participantId || '';
-    document.getElementById('consentSuccessName').textContent = payload.name + (payload.phone ? ' · ' + payload.phone : '');
-    document.getElementById('consentSuccessEmail').textContent = result.emailSent
-      ? '✉ Registration link sent to ' + payload.email
-      : (payload.email ? '✉ Could not send email — share the link manually' : '');
-
     // Store participant stub for pre-filling
     formState.participant = {
       participantId: result.participantId,
@@ -357,6 +348,15 @@ async function handleConsentSubmit(event) {
       consentPhone:  payload.phone,
       telephone:     payload.phone
     };
+
+    // Auto-proceed based on entry mode — no choice screen
+    document.getElementById('consentStep').classList.add('hidden');
+    showToast(`Consent recorded — ID: ${result.participantId}`, 'success');
+    if (formState.entryMode === 'capacity-new') {
+      continueToRegistrationWithCapacity();
+    } else {
+      continueToRegistration();
+    }
   } catch (err) {
     setConsentStatus(`Consent failed: ${err.message}`, 'error');
   } finally {
@@ -366,7 +366,6 @@ async function handleConsentSubmit(event) {
 }
 
 function continueToRegistration() {
-  document.getElementById('consentSuccessScreen').classList.add('hidden');
   formState.accessMode = 'token';
   initializeForm();
   if (formState.participant) prefillParticipantInfo(formState.participant);
@@ -375,7 +374,6 @@ function continueToRegistration() {
 }
 
 function continueToRegistrationWithCapacity() {
-  document.getElementById('consentSuccessScreen').classList.add('hidden');
   formState.accessMode = 'capacity-new';
   initializeForm();
   if (formState.participant) prefillParticipantInfo(formState.participant);
@@ -383,115 +381,40 @@ function continueToRegistrationWithCapacity() {
   document.getElementById('view-form').classList.remove('hidden');
 }
 
+function showCapacityPickerScreen() {
+  ['lockedScreen','entryModeScreen','continueScreen',   'adminStageScreen','placementLookupScreen',
+   'registrationLookupScreen','view-form'].forEach(id => {
+    document.getElementById(id)?.classList.add('hidden');
+  });
+  // Reset picker state
+  document.getElementById('participantIdLookup')?.classList.add('hidden');
+  document.getElementById('lookupParticipantId') && (document.getElementById('lookupParticipantId').value = '');
+  document.getElementById('lookupError')?.classList.add('hidden');
+  ['btnHasId','btnNoId'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.borderColor = '#e2e8f0';
+  });
+  document.getElementById('capacityEntryScreen').classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function showCapacityEntryScreen() {
-  document.getElementById('capacityConsentScreen').classList.remove('hidden');
-  document.getElementById('capacityEntryScreen').classList.add('hidden');
-  document.getElementById('lockedScreen').classList.add('hidden');
-  document.getElementById('view-form').classList.add('hidden');
-  initCcSignature();
-}
-let ccSigCanvas, ccSigCtx, ccSigDrawing = false;
-
-function initCcSignature() {
-  const old = document.getElementById('ccSigCanvas');
-  if (!old) return;
-  const fresh = old.cloneNode(false);
-  old.parentNode.replaceChild(fresh, old);
-  ccSigCanvas = fresh;
-  ccSigCanvas.width  = ccSigCanvas.offsetWidth  || 400;
-  ccSigCanvas.height = ccSigCanvas.offsetHeight || 120;
-  ccSigCtx = ccSigCanvas.getContext('2d');
-  ccSigCtx.strokeStyle = '#1e293b';
-  ccSigCtx.lineWidth   = 2;
-  ccSigCtx.lineCap     = 'round';
-  ccSigDrawing = false;
-
-  function pos(e) {
-    const r = ccSigCanvas.getBoundingClientRect();
-    const s = e.touches ? e.touches[0] : e;
-    return { x: (s.clientX - r.left) * (ccSigCanvas.width / r.width), y: (s.clientY - r.top) * (ccSigCanvas.height / r.height) };
-  }
-  ccSigCanvas.addEventListener('mousedown',  e => { ccSigDrawing = true; ccSigCtx.beginPath(); const p = pos(e); ccSigCtx.moveTo(p.x, p.y); });
-  ccSigCanvas.addEventListener('mousemove',  e => { if (!ccSigDrawing) return; const p = pos(e); ccSigCtx.lineTo(p.x, p.y); ccSigCtx.stroke(); });
-  ccSigCanvas.addEventListener('mouseup',    () => ccSigDrawing = false);
-  ccSigCanvas.addEventListener('touchstart', e => { e.preventDefault(); ccSigDrawing = true; ccSigCtx.beginPath(); const p = pos(e); ccSigCtx.moveTo(p.x, p.y); }, { passive: false });
-  ccSigCanvas.addEventListener('touchmove',  e => { e.preventDefault(); if (!ccSigDrawing) return; const p = pos(e); ccSigCtx.lineTo(p.x, p.y); ccSigCtx.stroke(); }, { passive: false });
-  ccSigCanvas.addEventListener('touchend',   () => ccSigDrawing = false);
-}
-
-function clearCcSignature() {
-  if (ccSigCtx) ccSigCtx.clearRect(0, 0, ccSigCanvas.width, ccSigCanvas.height);
-}
-
-function isCcSigEmpty() {
-  if (!ccSigCanvas) return true;
-  const d = ccSigCtx.getImageData(0, 0, ccSigCanvas.width, ccSigCanvas.height).data;
-  for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) return false; }
-  return true;
-}
-
-async function submitCapacityConsent() {
-  const errEl  = document.getElementById('capacityConsentError');
-  const venue  = document.getElementById('ccVenue').value.trim();
-  const name   = document.getElementById('ccName').value.trim();
-  const phone  = document.getElementById('ccPhone').value.trim();
-  const email  = document.getElementById('ccEmail').value.trim();
-  const agreed = document.getElementById('capacityConsentAgree').checked;
-
-  if (!venue || !name || !phone) { errEl.textContent = 'Please fill in Venue, Name and Phone.'; errEl.classList.remove('hidden'); return; }
-  if (!agreed)                   { errEl.textContent = 'Please agree to the consent terms to continue.'; errEl.classList.remove('hidden'); return; }
-  if (isCcSigEmpty())            { errEl.textContent = 'Please provide the participant signature.'; errEl.classList.remove('hidden'); return; }
-  errEl.classList.add('hidden');
-
-  const btn = document.getElementById('capacityConsentBtn');
-  btn.disabled = true;
-  btn.textContent = 'Submitting consent...';
-
-  try {
-    const signatureDataUrl = ccSigCanvas.toDataURL('image/png');
-    const result = await apiAction('initConsent', {
-      name, phone, email, venue,
-      signature:    signatureDataUrl,
-      language:     'en',
-      timestamp:    new Date().toISOString(),
-      consentGiven: true
-    });
-    if (result.status !== 'OK') throw new Error(result.message || 'Consent submission failed.');
-
-    // Consent recorded — now unlock capacity building with the returned token
-    const token = result.token;
-    formState.token = token;
-    formState.accessMode = 'capacity-new';
-    // Preserve whatever name was already on file; only pre-fill if fields are blank
-    formState.consentName = result.existingConsentName || name;
-    document.getElementById('capacityConsentScreen').classList.add('hidden');
-    initializeForm();
-    const parts = (result.existingConsentName || name).trim().split(/\s+/);
-    if (!document.getElementById('surname').value)    document.getElementById('surname').value   = parts[0] || '';
-    if (!document.getElementById('firstName').value) document.getElementById('firstName').value = parts.slice(1).join(' ') || '';
-    document.getElementById('telephone').value = phone;
-    showSections({ A: true, B: true, C: true, D: false });
-    document.getElementById('view-form').classList.remove('hidden');
-    showToast(result.emailSent ? 'Consent recorded. Email sent to participant.' : 'Consent recorded.', 'success');
-  } catch (err) {
-    errEl.textContent = 'Error: ' + err.message;
-    errEl.classList.remove('hidden');
-    btn.disabled = false;
-    btn.textContent = 'Agree and Continue';
-  }
+  showCapacityPickerScreen();
 }
 
 function selectCapacityMode(mode) {
   document.getElementById('btnHasId').style.borderColor = mode === 'existing' ? '#5B45E8' : '#e2e8f0';
-  document.getElementById('btnNoId').style.borderColor = mode === 'new' ? '#5B45E8' : '#e2e8f0';
+  document.getElementById('btnNoId').style.borderColor  = mode === 'new'      ? '#5B45E8' : '#e2e8f0';
   if (mode === 'existing') {
     document.getElementById('participantIdLookup').classList.remove('hidden');
+    document.getElementById('lookupParticipantId').focus();
   } else {
+    // New participant — run full consent → registration (A+B) + capacity (C)
     document.getElementById('capacityEntryScreen').classList.add('hidden');
-    formState.accessMode = 'capacity-new';
-    initializeForm();
-    showSections({ A: true, B: true, C: true, D: false });
-    document.getElementById('view-form').classList.remove('hidden');
+    formState.entryMode  = 'capacity-new';
+    formState.participant = null;
+    formState.token       = '';
+    showConsentStep();
   }
 }
 
@@ -593,7 +516,7 @@ function setupEventListeners() {
 
 // ===== ADMIN STAGE SELECTION (Entry tab) =====
 function showAdminStageScreen() {
-  ['lockedScreen','capacityConsentScreen','capacityEntryScreen',
+  ['lockedScreen','capacityEntryScreen',
    'placementLookupScreen','registrationLookupScreen','view-form'].forEach(id => {
     document.getElementById(id)?.classList.add('hidden');
   });
@@ -761,9 +684,6 @@ async function loadParticipantForPlacement() {
     const result = await apiAction('getParticipantById', { participantId: pid });
     if (!result?.participant?.participantId) throw new Error('Participant not found.');
     const p = result.participant;
-    if (p.capacityBuildingStatus !== 'submitted') {
-      throw new Error('This participant has not yet completed capacity building. Placement requires training to be recorded first.');
-    }
     if (p.jobPlacementStatus === 'submitted') {
       throw new Error('This participant has already been placed (jobPlacementStatus = submitted).');
     }
@@ -788,14 +708,71 @@ async function loadParticipantForPlacement() {
   }
 }
 
+// ===== ADMIN SIDEBAR =====
+function toggleAdminSidebar() {
+  const panel   = document.getElementById('adminSidebarPanel');
+  const overlay = document.getElementById('adminSidebarOverlay');
+  const isOpen  = panel.classList.contains('open');
+  panel.classList.toggle('open', !isOpen);
+  overlay.classList.toggle('open', !isOpen);
+  document.body.style.overflow = isOpen ? '' : 'hidden';
+}
+function closeAdminSidebar() {
+  document.getElementById('adminSidebarPanel')?.classList.remove('open');
+  document.getElementById('adminSidebarOverlay')?.classList.remove('open');
+  document.body.style.overflow = '';
+}
+function syncSidebarActive(view) {
+  ['dashboard','report','placement','correction','sheet','batch','entry'].forEach(v => {
+    document.getElementById('sidebar-tab-' + v)?.classList.toggle('active',
+      v === view || (v === 'entry' && view === 'form'));
+  });
+}
+
 // ===== VIEW SWITCHING =====
 function setView(view) {
   formState.currentView = view;
-  ['form', 'sheet', 'dashboard', 'report', 'batch'].forEach(v => {
-    document.getElementById('view-' + v).classList.toggle('hidden', view !== v);
-    const tab = document.getElementById('tab-' + v);
-    if (tab) tab.classList.toggle('active', view === v);
+  ['form', 'sheet', 'dashboard', 'report', 'batch', 'correction'].forEach(v => {
+    document.getElementById('view-' + v)?.classList.toggle('hidden', view !== v);
+    document.getElementById('tab-' + v)?.classList.toggle('active', view === v);
   });
+  document.getElementById('tab-entry')?.classList.toggle('active', view === 'form');
+  if (view !== 'placement') {
+    document.getElementById('placementLookupScreen')?.classList.add('hidden');
+  }
+  document.getElementById('tab-placement')?.classList.toggle('active', view === 'placement');
+  syncSidebarActive(view);
+}
+
+// ===== ADMIN NAV TOGGLE =====
+function handleNavLogoClick() {
+  if (formState.isAdmin) {
+    exitAdminMode();
+  } else {
+    openAdminView('dashboard');
+  }
+}
+
+function switchToAdminNav() {
+  document.getElementById('fieldNav').classList.add('hidden');
+  document.getElementById('adminNav').classList.remove('hidden');
+  document.querySelector('.navbar').classList.add('admin-mode');
+  document.getElementById('navSubtitle').textContent = 'HAPPY PROGRAM • ADMIN';
+  // adminMenuBtn visibility handled by CSS .navbar.admin-mode .admin-menu-btn
+}
+
+function exitAdminMode() {
+  formState.isAdmin       = false;
+  formState.adminPassword = '';
+  formState.masterSheetData = [];
+  closeAdminSidebar();
+  document.getElementById('adminNav').classList.add('hidden');
+  document.getElementById('fieldNav').classList.remove('hidden');
+  document.querySelector('.navbar').classList.remove('admin-mode');
+  document.getElementById('navSubtitle').textContent = 'HAPPY PROGRAM • FIELD REGISTRATION';
+  setView('form');
+  showEntryModeScreen();
+  showToast('Exited admin mode', 'info');
 }
 
 // ===== ADMIN LOGIN =====
@@ -805,11 +782,16 @@ function showAdminLogin() {
 
 function openAdminView(targetView) {
   if (formState.isAdmin) {
+    if (targetView === 'placement') {
+      openAdminPlacement();
+      return;
+    }
     setView(targetView);
-    if (targetView === 'dashboard') loadDashboard();
-    else if (targetView === 'report') loadReport();
-    else if (targetView === 'sheet') loadSheetData();
-    else if (targetView === 'batch') loadBatchPlacement();
+    if (targetView === 'dashboard')   loadDashboard();
+    else if (targetView === 'report')     loadReport();
+    else if (targetView === 'sheet')      loadSheetData();
+    else if (targetView === 'batch')      loadBatchPlacement();
+    else if (targetView === 'correction') loadCorrection();
     return;
   }
   formState.pendingAdminView = targetView;
@@ -817,6 +799,28 @@ function openAdminView(targetView) {
   document.getElementById('adminPassword').value = '';
   document.getElementById('adminPassword').focus();
 }
+function openAdminPlacement() {
+  // Hide all view-* divs and mark placement tab active
+  ['form','sheet','dashboard','report','batch','correction'].forEach(v => {
+    document.getElementById('view-' + v)?.classList.add('hidden');
+    document.getElementById('tab-' + v)?.classList.remove('active');
+  });
+  document.getElementById('tab-entry')?.classList.remove('active');
+  document.getElementById('tab-placement')?.classList.add('active');
+  formState.currentView = 'placement';
+  syncSidebarActive('placement');
+  formState.accessMode  = 'admin';
+  // Reset and show the placement lookup screen
+  const pidInput = document.getElementById('placementLookupId');
+  if (pidInput) { pidInput.value = ''; pidInput.focus(); }
+  document.getElementById('placementLookupError')?.classList.add('hidden');
+  const btn = document.querySelector('#placementLookupScreen button[onclick="loadParticipantForPlacement()"]');
+  if (btn) { btn.disabled = false; btn.textContent = 'Load Participant'; }
+  document.getElementById('view-form')?.classList.add('hidden');
+  document.getElementById('placementLookupScreen').classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function closeAdminLogin() {
   document.getElementById('adminModal').classList.add('hidden');
 }
@@ -830,18 +834,17 @@ async function verifyAdmin() {
     formState.adminPassword = pwd;
     formState.masterSheetData = data;
     closeAdminLogin();
+    switchToAdminNav();
     showToast('Admin access granted', 'success');
-    // Coming from locked screen → show stage selection instead of jumping into the form
-    if (!document.getElementById('lockedScreen').classList.contains('hidden')) {
-      document.getElementById('lockedScreen').classList.add('hidden');
-      showAdminStageScreen();
-      return; // stage selection will handle the rest
-    }
-    const targetView = formState.pendingAdminView || 'sheet';
+    // Coming from locked/entry screen → go to dashboard by default
+    const targetView = formState.pendingAdminView || 'dashboard';
     formState.pendingAdminView = null;
-    if (targetView === 'dashboard') { setView('dashboard'); populateDashboardFilters(data); applyDashboardFilters(); }
-    else if (targetView === 'report') { setView('report'); renderReport(data); }
-    else if (targetView === 'batch') { setView('batch'); loadBatchPlacement(); }
+    if (targetView === 'dashboard')   { setView('dashboard'); populateDashboardFilters(data); applyDashboardFilters(); }
+    else if (targetView === 'report')     { setView('report'); renderReport(data); }
+    else if (targetView === 'correction') { setView('correction'); loadCorrection(); }
+    else if (targetView === 'batch')      { setView('batch'); loadBatchPlacement(); }
+    else if (targetView === 'placement')  { openAdminPlacement(); }
+    else if (targetView === 'form')       { setView('form'); showAdminStageScreen(); }
     else { renderSheet(data); setView('sheet'); }
   } catch (err) {
     showToast(`Access denied: ${err.message}`, 'error');
@@ -1418,16 +1421,18 @@ function handleSubmitAnother() {
     returnToWorkflowStart();
   } else if (formState.accessMode === 'capacity-new' || formState.accessMode === 'capacity-existing') {
     document.getElementById('successScreen').classList.remove('show');
-    document.getElementById('mainForm').classList.remove('hidden');
-    ['ccVenue','ccName','ccPhone','ccEmail'].forEach(id => { document.getElementById(id).value = ''; });
-    document.getElementById('capacityConsentAgree').checked = false;
-    document.getElementById('capacityConsentError').classList.add('hidden');
-    clearCcSignature();
-    document.getElementById('capacityConsentBtn').disabled = false;
-    document.getElementById('capacityConsentBtn').textContent = 'Agree and Continue';
-    formState.token = null;
+    formState.token      = null;
     formState.accessMode = null;
-    showCapacityEntryScreen();
+    formState.entryMode  = null;
+    formState.participant = null;
+    // Clear consent fields for next participant
+    ['consentVenue','consentName','consentPhone','consentEmail'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const ca = document.getElementById('consentAgree');
+    if (ca) ca.checked = false;
+    clearConsentSignature();
+    showCapacityPickerScreen();
   } else if (formState.accessMode === 'admin' && formState.isAdmin) {
     // Admin goes back to stage selection after each submission
     document.getElementById('successScreen').classList.remove('show');
@@ -1473,6 +1478,7 @@ function returnToWorkflowStart() {
   formState.token       = null;
   formState.participant = null;
   formState.accessMode  = null;
+  formState.entryMode   = null;
   formState.consentName = '';
   formState.consentSigned  = false;
   formState.consentDrawing = false;
@@ -1480,7 +1486,6 @@ function returnToWorkflowStart() {
   localStorage.removeItem('happyContinuationToken');
   document.getElementById('mainForm')?.classList.add('hidden');
   document.getElementById('consentStep')?.classList.add('hidden');
-  document.getElementById('consentSuccessScreen')?.classList.add('hidden');
   document.getElementById('successScreen')?.classList.remove('show');
   // Clear consent step fields for the next participant
   ['consentVenue','consentName','consentPhone','consentEmail'].forEach(id => {
@@ -1649,7 +1654,7 @@ function loadDashboard() {
   applyDashboardFilters();
 }
 
-// ===== DASHBOARD (6-section MERL layout) =====================================
+// ===== DASHBOARD (M&E layout) ================================================
 function renderDashboard(data) {
   const totalInSheet = (formState.masterSheetData || []).length;
   const filterNote   = data.length < totalInSheet ? ` — ${data.length} of ${totalInSheet} (filtered)` : '';
@@ -1674,13 +1679,16 @@ function renderDashboard(data) {
   const placed     = data.filter(r => r.jobPlacementStatus === 'submitted').length;
   const cvUploaded = data.filter(r => r.cvStatus === 'cv_uploaded').length;
   const noCv       = data.filter(r => r.cvStatus === 'no_cv').length;
+  const trainedData = data.filter(r => r.capacityBuildingStatus === 'submitted');
+  const placedData  = data.filter(r => r.jobPlacementStatus === 'submitted');
 
   document.getElementById('dashboardContent').innerHTML =
     dashSection1_Snapshot(total, registered, trained, placed, female, male, youth, pwd, refugee, displaced, cvUploaded, noCv) +
     dashSection2_Trend(data) +
+    dashSectionDemographics(data, total, registered, female, male, youth, pwd, refugee, displaced) +
     dashSection3_Partners(data) +
-    dashSection4_Inclusion(total, female, youth, pwd, refugee, displaced) +
-    dashSection5_Charts(data, placed) +
+    dashSection7_Training(trainedData, trained) +
+    dashSection8_Placement(placedData, placed) +
     dashSection6_Quality(data);
 }
 
@@ -1803,7 +1811,63 @@ function dashSection2_Trend(data) {
     </div>`;
 }
 
-// ── 3. Partner conversion performance table ───────────────────────────────────
+// ── Demographics — age bands, gender, education, inclusion, geography ─────────
+function dashSectionDemographics(data, total, registered, female, male, youth, pwd, refugee, displaced) {
+  if (!total) return '';
+  const clean   = (field) => groupCount(data, field).filter(([k]) => k !== '(blank)');
+  const byRegion  = clean('region');
+  const byEdu     = clean('educationLevel');
+  const byEmpStat = clean('employmentStatus');
+
+  const AGE_GROUPS = [[15,19,'15–19'],[20,24,'20–24'],[25,29,'25–29'],[30,35,'30–35'],[36,50,'36–50'],[51,120,'51+']];
+  const ageBands  = AGE_GROUPS.map(([min, max, label]) => {
+    const n = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= min && a <= max; }).length;
+    return [label, n];
+  });
+  const ageUnknown = data.filter(r => !r.age || isNaN(Number(r.age))).length;
+
+  const mini = (title, entries, color) => entries.length
+    ? `<div><p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">${title}</p>${barChart(entries, color)}</div>`
+    : '';
+
+  return `
+    <div style="background:#f8fafc;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.5rem;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.9rem;">Demographics &amp; Inclusion</p>
+
+      <!-- Gender + inclusion bars -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.1rem;">
+        <div>
+          <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Gender</p>
+          ${pipelineBar('Female', female, total, '#ec4899')}
+          ${pipelineBar('Male',   male,   total, '#3b82f6')}
+        </div>
+        <div>
+          <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Inclusion Indicators</p>
+          ${pipelineBar('Youth (15–35)', youth,    total, '#8b5cf6')}
+          ${pipelineBar('PWD',          pwd,      total, '#f59e0b')}
+          ${pipelineBar('Refugee',      refugee,  total, '#ef4444')}
+          ${pipelineBar('Displaced',    displaced,total, '#f97316')}
+        </div>
+      </div>
+
+      <!-- Age bands -->
+      <div style="margin-bottom:1.1rem;">
+        <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Age Bands${ageUnknown ? ` <span style="font-weight:400;font-size:0.58rem;">(${ageUnknown} unknown)</span>` : ''}</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.2rem 1rem;">
+          ${ageBands.map(([label, n]) => pipelineBar(label, n, total, '#5B45E8')).join('')}
+        </div>
+      </div>
+
+      <!-- Education + baseline employment + geography -->
+      <div style="display:grid;grid-template-columns:1fr 1fr${byRegion.length?' 1fr':''};gap:1.25rem;">
+        ${mini('Education Level', byEdu, '#f59e0b')}
+        ${mini('Baseline Employment', byEmpStat, '#10b981')}
+        ${mini('By Region', byRegion, '#3b82f6')}
+      </div>
+    </div>`;
+}
+
+// ── 3. Partner performance — conversion + inclusion breakdown ─────────────────
 function dashSection3_Partners(data) {
   const partners = [...new Set(data.map(r => r.implementingPartner).filter(Boolean))].sort();
   if (!partners.length) return '';
@@ -1811,78 +1875,71 @@ function dashSection3_Partners(data) {
   const ragBg  = p => p >= 70 ? '#dcfce7' : p >= 40 ? '#fef3c7' : '#fee2e2';
   const ragFg  = p => p >= 70 ? '#166534' : p >= 40 ? '#92400e' : '#991b1b';
   const ragCell = (n, d) => {
-    if (!d) return `<td style="padding:0.35rem 0.5rem;text-align:right;font-size:0.68rem;color:#94a3b8;">—</td>`;
+    if (!d) return `<td style="padding:0.3rem 0.5rem;text-align:right;font-size:0.67rem;color:#94a3b8;">—</td>`;
     const p = Math.round(n / d * 100);
-    return `<td style="padding:0.35rem 0.5rem;text-align:right;">
-      <span style="font-size:0.7rem;font-weight:700;padding:0.1rem 0.4rem;border-radius:999px;background:${ragBg(p)};color:${ragFg(p)};">${p}%</span>
-      <span style="font-size:0.6rem;color:#94a3b8;"> (${n})</span></td>`;
+    return `<td style="padding:0.3rem 0.5rem;text-align:right;">
+      <span style="font-size:0.68rem;font-weight:700;padding:0.1rem 0.4rem;border-radius:999px;background:${ragBg(p)};color:${ragFg(p)};">${p}%</span>
+      <span style="font-size:0.58rem;color:#94a3b8;"> (${n})</span></td>`;
   };
+  const numCell = (n, sub) => `<td style="padding:0.3rem 0.5rem;text-align:right;font-size:0.68rem;font-weight:600;">${n}${sub ? `<span style="font-size:0.57rem;color:#94a3b8;font-weight:400;"> (${sub})</span>` : ''}</td>`;
 
   const rows = partners.map(p => {
-    const g   = data.filter(r => r.implementingPartner === p);
-    const reg = g.filter(r => r.participantInfoStatus === 'submitted').length;
-    const tr  = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl  = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    const g    = data.filter(r => r.implementingPartner === p);
+    const f    = g.filter(r => r.sex === 'Female').length;
+    const yo   = g.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
+    const reg  = g.filter(r => r.participantInfoStatus === 'submitted').length;
+    const tr   = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
+    const pl   = g.filter(r => r.jobPlacementStatus === 'submitted').length;
     return `<tr style="border-bottom:1px solid #f1f5f9;">
-      <td style="padding:0.35rem 0.5rem;font-weight:700;font-size:0.75rem;color:#1e293b;">${escapeHtml(p)}</td>
-      <td style="padding:0.35rem 0.5rem;text-align:right;font-size:0.75rem;">${g.length}</td>
+      <td style="padding:0.3rem 0.5rem;font-weight:700;font-size:0.73rem;color:#1e293b;white-space:nowrap;">${escapeHtml(p)}</td>
+      ${numCell(g.length)}
+      ${numCell(f, pct(f, g.length))}
+      ${numCell(yo, pct(yo, g.length))}
       ${ragCell(reg, g.length)}
       ${ragCell(tr, reg)}
       ${ragCell(pl, tr)}
     </tr>`;
   }).join('');
 
-  const th = (txt, right) => `<th style="padding:0.3rem 0.5rem;text-align:${right?'right':'left'};font-size:0.58rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">${txt}</th>`;
+  const total = data.length;
+  const tf    = data.filter(r => r.sex === 'Female').length;
+  const tyo   = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
+  const treg  = data.filter(r => r.participantInfoStatus === 'submitted').length;
+  const ttr   = data.filter(r => r.capacityBuildingStatus === 'submitted').length;
+  const tpl   = data.filter(r => r.jobPlacementStatus === 'submitted').length;
+  const totalsRow = `<tr style="background:#f8fafc;font-weight:800;border-top:2px solid #e2e8f0;">
+    <td style="padding:0.35rem 0.5rem;font-size:0.73rem;color:#374151;">TOTAL</td>
+    ${numCell(total)}
+    ${numCell(tf, pct(tf, total))}
+    ${numCell(tyo, pct(tyo, total))}
+    ${ragCell(treg, total)}
+    ${ragCell(ttr, treg)}
+    ${ragCell(tpl, ttr)}
+  </tr>`;
+
+  const th = (txt, right) => `<th style="padding:0.3rem 0.5rem;text-align:${right?'right':'left'};font-size:0.57rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">${txt}</th>`;
 
   return `
     <div style="margin-bottom:1.5rem;">
-      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Partner Conversion Performance</p>
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">Partner Performance</p>
       <div style="overflow-x:auto;">
         <table style="width:100%;border-collapse:collapse;">
-          <thead><tr>${th('Partner',false)}${th('Total',true)}${th('Registered ↓',true)}${th('Trained ↓',true)}${th('Placed ↓',true)}</tr></thead>
-          <tbody>${rows}</tbody>
+          <thead><tr>
+            ${th('Partner',false)}${th('Total',true)}${th('Female',true)}${th('Youth',true)}
+            ${th('Registered ↓',true)}${th('Trained ↓',true)}${th('Placed ↓',true)}
+          </tr></thead>
+          <tbody>${rows}${totalsRow}</tbody>
         </table>
       </div>
-      <p style="font-size:0.62rem;color:#94a3b8;margin-top:0.35rem;">&#x2193; = conversion rate from the previous stage &nbsp; &#x1F7E2; &#x2265;70% &nbsp; &#x1F7E1; 40–69% &nbsp; &#x1F534; &lt;40%</p>
+      <p style="font-size:0.6rem;color:#94a3b8;margin-top:0.35rem;">&#x2193; = conversion from previous stage &nbsp;&#x1F7E2; &#x2265;70% &nbsp;&#x1F7E1; 40–69% &nbsp;&#x1F534; &lt;40%</p>
     </div>`;
 }
 
-// ── 4. Inclusion indicators ───────────────────────────────────────────────────
-function dashSection4_Inclusion(total, female, youth, pwd, refugee, displaced) {
-  return `
-    <div style="background:#f8fafc;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.5rem;">
-      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.75rem;">Inclusion Indicators</p>
-      ${pipelineBar('Female',       female,   total, '#ec4899')}
-      ${pipelineBar('Youth (15–35)',youth,    total, '#8b5cf6')}
-      ${pipelineBar('PWD',          pwd,      total, '#f59e0b')}
-      ${pipelineBar('Refugee',      refugee,  total, '#ef4444')}
-      ${pipelineBar('Displaced',    displaced,total, '#f97316')}
-    </div>`;
-}
+// ── 4. (retired — content moved to dashSectionDemographics) ──────────────────
+function dashSection4_Inclusion() { return ''; }
 
-// ── 5. Distribution bar charts ────────────────────────────────────────────────
-function dashSection5_Charts(data, placed) {
-  const clean      = (d, field) => groupCount(d, field).filter(([k]) => k !== '(blank)');
-  const byRegion     = clean(data, 'region');
-  const byEmployment = clean(data, 'employmentStatus');
-  const byEducation  = clean(data, 'educationLevel');
-  const placed_data  = data.filter(r => r.jobPlacementStatus === 'submitted');
-  const byEmployer   = placed > 0 ? clean(placed_data, 'employerName') : [];
-
-  const mini = (title, entries, color) => entries.length
-    ? `<div><p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">${title}</p>${barChart(entries, color)}</div>`
-    : '';
-
-  return `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
-      ${mini('By Region', byRegion, '#3b82f6')}
-      ${mini('Employment Status', byEmployment, '#10b981')}
-    </div>
-    <div style="display:grid;grid-template-columns:${byEmployer.length?'1fr 1fr':'1fr'};gap:1.25rem;margin-bottom:1.5rem;">
-      ${mini('Education Level', byEducation, '#f59e0b')}
-      ${byEmployer.length ? mini('Top Employers (' + placed + ' placed)', byEmployer, '#06b6d4') : ''}
-    </div>`;
-}
+// ── 5. (retired — content moved to dashSectionDemographics) ──────────────────
+function dashSection5_Charts() { return ''; }
 
 // ── 6. Data quality alerts — expandable per-participant lists ─────────────────
 function dashSection6_Quality(data) {
@@ -2011,6 +2068,128 @@ function dashSection6_Quality(data) {
     </div>`;
 }
 
+// ── 7. Training Outcomes ──────────────────────────────────────────────────────
+function dashSection7_Training(trainedData, trained) {
+  if (!trained) return '';
+
+  const female     = trainedData.filter(r => r.sex === 'Female').length;
+  const youth      = trainedData.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
+  const pwd        = trainedData.filter(r => r.disabilityStatus === 'Yes').length;
+  const refugee    = trainedData.filter(r => r.refugeeStatus === 'Yes').length;
+  const displaced  = trainedData.filter(r => r.displacementStatus === 'Yes').length;
+
+  const clean      = (field) => groupCount(trainedData, field).filter(([k]) => k !== '(blank)');
+  const byPartner  = clean('implementingPartner');
+  const byRegion   = clean('region');
+  const bySector   = clean('sector');
+  const byMode     = clean('trainingMode');
+  const byCompletion = clean('completionStatus');
+
+  const mini = (title, entries, color) => entries.length
+    ? `<div><p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">${title}</p>${barChart(entries, color)}</div>`
+    : '';
+
+  const cols2 = [byMode, byCompletion].filter(a => a.length).length || 1;
+
+  return `
+    <div style="background:#f0fdf4;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.25rem;border-left:3px solid #10b981;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#065f46;letter-spacing:0.07em;margin:0 0 0.85rem;">&#x1F393; Training Outcomes — ${trained} Trained</p>
+
+      <!-- KPI row -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0.6rem;margin-bottom:1rem;">
+        ${statCard(trained,  'Trained',     '#10b981')}
+        ${statCard(female,   'Female',      '#ec4899', pct(female, trained))}
+        ${statCard(youth,    'Youth 15–35', '#6366f1', pct(youth, trained))}
+        ${statCard(pwd,      'PWD',         '#f59e0b', pct(pwd, trained))}
+        ${statCard(refugee + displaced, 'Refugee/IDP', '#ef4444', pct(refugee + displaced, trained))}
+      </div>
+
+      <!-- Inclusion bars -->
+      <div style="margin-bottom:1rem;">
+        ${pipelineBar('Female',        female,             trained, '#ec4899')}
+        ${pipelineBar('Youth (15–35)', youth,              trained, '#6366f1')}
+        ${pipelineBar('PWD',           pwd,                trained, '#f59e0b')}
+        ${pipelineBar('Refugee/IDP',   refugee + displaced,trained, '#ef4444')}
+      </div>
+
+      <!-- Mode + completion -->
+      ${cols2 > 0 ? `<div style="display:grid;grid-template-columns:repeat(${cols2},1fr);gap:1.25rem;margin-bottom:1rem;">
+        ${mini('Training Mode',      byMode,       '#10b981')}
+        ${mini('Completion Status',  byCompletion, '#3b82f6')}
+      </div>` : ''}
+
+      <!-- Partner + region + sector -->
+      <div style="display:grid;grid-template-columns:1fr 1fr${bySector.length?' 1fr':''};gap:1.25rem;">
+        ${mini('By Partner', byPartner, '#059669')}
+        ${mini('By Region',  byRegion,  '#3b82f6')}
+        ${mini('By Sector',  bySector,  '#8b5cf6')}
+      </div>
+    </div>`;
+}
+
+// ── 8. Placement Outcomes ─────────────────────────────────────────────────────
+function dashSection8_Placement(placedData, placed) {
+  if (!placed) return '';
+
+  const female    = placedData.filter(r => r.sex === 'Female').length;
+  const youth     = placedData.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
+  const pwd       = placedData.filter(r => r.disabilityStatus === 'Yes').length;
+  const refugee   = placedData.filter(r => r.refugeeStatus === 'Yes').length;
+  const displaced = placedData.filter(r => r.displacementStatus === 'Yes').length;
+
+  const clean      = (field) => groupCount(placedData, field).filter(([k]) => k !== '(blank)');
+  const byEmployer  = clean('employerName');
+  const byEmpType   = clean('employmentType');
+  const byContract  = clean('contractType');
+  const bySector    = clean('plSector').length ? clean('plSector') : clean('sector');
+  const byIncome    = clean('placementIncome');
+  const byRegion    = clean('workRegion').length ? clean('workRegion') : clean('region');
+
+  const mini = (title, entries, color) => entries.length
+    ? `<div><p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.07em;margin-bottom:0.5rem;">${title}</p>${barChart(entries, color)}</div>`
+    : '';
+
+  const midCols = [byEmpType, bySector, byContract].filter(a => a.length).length || 1;
+
+  return `
+    <div style="background:#eff6ff;border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.25rem;border-left:3px solid #3b82f6;">
+      <p style="font-size:0.62rem;font-weight:900;text-transform:uppercase;color:#1e40af;letter-spacing:0.07em;margin:0 0 0.85rem;">&#x1F4BC; Placement Outcomes — ${placed} Placed</p>
+
+      <!-- KPI row -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0.6rem;margin-bottom:1rem;">
+        ${statCard(placed,   'Placed',      '#3b82f6')}
+        ${statCard(female,   'Female',      '#ec4899', pct(female, placed))}
+        ${statCard(youth,    'Youth 15–35', '#6366f1', pct(youth, placed))}
+        ${statCard(pwd,      'PWD',         '#f59e0b', pct(pwd, placed))}
+        ${statCard(refugee + displaced, 'Refugee/IDP', '#ef4444', pct(refugee + displaced, placed))}
+      </div>
+
+      <!-- Inclusion bars -->
+      <div style="margin-bottom:1rem;">
+        ${pipelineBar('Female',        female,             placed, '#ec4899')}
+        ${pipelineBar('Youth (15–35)', youth,              placed, '#6366f1')}
+        ${pipelineBar('PWD',           pwd,                placed, '#f59e0b')}
+        ${pipelineBar('Refugee/IDP',   refugee + displaced,placed, '#ef4444')}
+      </div>
+
+      <!-- Employers + income -->
+      <div style="display:grid;grid-template-columns:${byEmployer.length&&byIncome.length?'1fr 1fr':byEmployer.length?'1fr':'1fr'};gap:1.25rem;margin-bottom:1rem;">
+        ${mini('Top Employers',   byEmployer, '#3b82f6')}
+        ${mini('Placement Income', byIncome,  '#10b981')}
+      </div>
+
+      <!-- Employment type + sector + contract -->
+      <div style="display:grid;grid-template-columns:repeat(${midCols},1fr);gap:1.25rem;margin-bottom:${byRegion.length?'1rem':'0'};">
+        ${mini('Employment Type', byEmpType,  '#10b981')}
+        ${mini('Sector',          bySector,   '#8b5cf6')}
+        ${mini('Contract Type',   byContract, '#f59e0b')}
+      </div>
+
+      <!-- Work region -->
+      ${byRegion.length ? `<div>${mini('By Work Region', byRegion, '#06b6d4')}</div>` : ''}
+    </div>`;
+}
+
 function pipelineBar(label, value, total, color) {
   const w = total ? Math.round(value / total * 100) : 0;
   return `<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;">
@@ -2029,8 +2208,8 @@ function printDashboard() {
 function statCard(value, label, color, subtitle) {
   return `<div style="background:#fafafa;border-radius:0.75rem;padding:0.75rem 0.5rem;border-left:3px solid ${color};text-align:center;">
     <div style="font-size:1.5rem;font-weight:900;color:${color};line-height:1.1;">${value}</div>
-    ${subtitle ? `<div style="font-size:0.58rem;color:${color};font-weight:700;margin-bottom:0.1rem;">${subtitle}</div>` : ''}
-    <div style="font-size:0.58rem;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-top:0.15rem;">${label}</div>
+    ${subtitle ? `<div style="font-size:0.68rem;color:${color};font-weight:700;margin-bottom:0.1rem;">${subtitle}</div>` : ''}
+    <div style="font-size:0.68rem;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-top:0.15rem;">${label}</div>
   </div>`;
 }
 
@@ -2043,16 +2222,16 @@ function groupCount(data, field) {
 }
 
 function barChart(entries, color) {
-  if (!entries.length) return '<p style="font-size:0.7rem;color:#94a3b8;">No data</p>';
+  if (!entries.length) return '<p style="font-size:0.75rem;color:#94a3b8;">No data</p>';
   const max = entries[0][1];
   return entries.slice(0, 8).map(([label, count]) => {
     const w = max ? Math.round(count / max * 100) : 0;
-    return `<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">
-      <span style="min-width:90px;max-width:90px;font-size:0.63rem;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
-      <div style="flex:1;background:#f1f5f9;border-radius:999px;height:6px;">
-        <div style="background:${color};height:6px;border-radius:999px;width:${w}%;"></div>
+    return `<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.35rem;">
+      <span style="min-width:90px;max-width:90px;font-size:0.7rem;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+      <div style="flex:1;background:#f1f5f9;border-radius:999px;height:7px;">
+        <div style="background:${color};height:7px;border-radius:999px;width:${w}%;"></div>
       </div>
-      <span style="font-size:0.6rem;color:#64748b;min-width:22px;text-align:right;">${count}</span>
+      <span style="font-size:0.68rem;color:#64748b;min-width:24px;text-align:right;font-weight:600;">${count}</span>
     </div>`;
   }).join('');
 }
@@ -2108,147 +2287,243 @@ function applyReportFilters() {
 }
 
 function buildReportTables(data) {
-  const total = data.length;
+  const total      = data.length;
   if (!total) {
     document.getElementById('reportContent').innerHTML = '<p style="text-align:center;color:#94a3b8;padding:2rem;font-size:0.85rem;">No records match the current filters.</p>';
     return;
   }
-  const trained    = data.filter(r => r.capacityBuildingStatus === 'submitted');
-  const placed     = data.filter(r => r.jobPlacementStatus === 'submitted');
-  const cvUploaded = data.filter(r => r.cvStatus === 'cv_uploaded').length;
-  const noCv       = data.filter(r => r.cvStatus === 'no_cv').length;
 
-  // Partner summary — includes refugee + displaced + totals row
+  const registered  = data.filter(r => r.participantInfoStatus === 'submitted');
+  const trained     = data.filter(r => r.capacityBuildingStatus === 'submitted');
+  const placed      = data.filter(r => r.jobPlacementStatus === 'submitted');
+  const cvUploaded  = data.filter(r => r.cvStatus === 'cv_uploaded').length;
+  const noCv        = data.filter(r => r.cvStatus === 'no_cv').length;
+
+  const isYouth = r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; };
+  const tf = d => d.filter(r => r.sex === 'Female').length;
+  const ty = d => d.filter(isYouth).length;
+  const tp = d => d.filter(r => r.disabilityStatus === 'Yes').length;
+  const tr_ref = d => d.filter(r => r.refugeeStatus === 'Yes').length;
+  const tr_dis = d => d.filter(r => r.displacementStatus === 'Yes').length;
+
+  // ── 1. Summary bar ──────────────────────────────────────────────────────────
+  const summaryBar = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:0.5rem;margin-bottom:1.25rem;">
+      ${reportKpi(total,           'Consented',   '#5B45E8')}
+      ${reportKpi(registered.length,'Registered', '#3b82f6', pct(registered.length, total))}
+      ${reportKpi(trained.length,  'Trained',     '#10b981', pct(trained.length, total))}
+      ${reportKpi(placed.length,   'Placed',      '#06b6d4', pct(placed.length, total))}
+      ${reportKpi(tf(data),        'Female',      '#ec4899', pct(tf(data), total))}
+      ${reportKpi(ty(data),        'Youth 15–35', '#8b5cf6', pct(ty(data), total))}
+      ${reportKpi(tp(data),        'PWD',         '#f59e0b', pct(tp(data), total))}
+      ${reportKpi(cvUploaded,      'CV Uploaded', '#64748b', pct(cvUploaded, total))}
+    </div>`;
+
+  // ── 2. Partner summary ──────────────────────────────────────────────────────
   const allPartners = [...new Set(data.map(r => r.implementingPartner || '(None)'))].sort();
   const partnerRows = allPartners.map(p => {
-    const g  = data.filter(r => (r.implementingPartner || '(None)') === p);
-    const tr = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl = g.filter(r => r.jobPlacementStatus === 'submitted').length;
-    return [p, g.length,
-      g.filter(r => r.sex === 'Female').length,
-      g.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length,
-      g.filter(r => r.disabilityStatus === 'Yes').length,
-      g.filter(r => r.refugeeStatus === 'Yes').length,
-      g.filter(r => r.displacementStatus === 'Yes').length,
-      tr, pct(tr, g.length), pl, pct(pl, g.length)];
+    const g = data.filter(r => (r.implementingPartner || '(None)') === p);
+    const tr_n = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
+    const pl_n = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    const tr_f = g.filter(r => r.capacityBuildingStatus === 'submitted' && r.sex === 'Female').length;
+    const pl_f = g.filter(r => r.jobPlacementStatus === 'submitted' && r.sex === 'Female').length;
+    return [p, g.length, tf(g), pct(tf(g),g.length), ty(g), pct(ty(g),g.length),
+            tp(g), tr_ref(g), tr_dis(g),
+            tr_n, pct(tr_n,g.length), tr_f, pct(tr_f,tr_n||1),
+            pl_n, pct(pl_n,g.length), pl_f, pct(pl_f,pl_n||1)];
   });
-  const partnerTotals = ['TOTAL', total,
-    data.filter(r => r.sex === 'Female').length,
-    data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length,
-    data.filter(r => r.disabilityStatus === 'Yes').length,
-    data.filter(r => r.refugeeStatus === 'Yes').length,
-    data.filter(r => r.displacementStatus === 'Yes').length,
-    trained.length, pct(trained.length, total), placed.length, pct(placed.length, total)
-  ];
+  const ptotals = ['TOTAL', total, tf(data), pct(tf(data),total), ty(data), pct(ty(data),total),
+    tp(data), tr_ref(data), tr_dis(data),
+    trained.length, pct(trained.length,total), tf(trained), pct(tf(trained),trained.length||1),
+    placed.length, pct(placed.length,total), tf(placed), pct(tf(placed),placed.length||1)];
 
-  // Regional distribution — exclude rogue/blank regions, add totals
+  const partnerSection = reportSection('&#x1F91D; Partner Summary', '#064e3b', '#f0fdf4', summaryTable(
+    ['Partner','Total','Female','F%','Youth','Y%','PWD','Refugee','Displaced',
+     'Trained','Train%','F Trained','FTr%','Placed','Place%','F Placed','FPl%'],
+    [...partnerRows, ptotals]
+  ));
+
+  // ── 3. Regional distribution ────────────────────────────────────────────────
   const allRegions = [...new Set(data.map(r => r.region).filter(Boolean))].sort();
   const regionRows = allRegions.map(reg => {
-    const g = data.filter(r => r.region === reg);
-    const f = g.filter(r => r.sex === 'Female').length;
-    const y = g.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
-    const tr = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl = g.filter(r => r.jobPlacementStatus === 'submitted').length;
-    return [reg, g.length, f, pct(f, g.length), y, pct(y, g.length), tr, pl];
+    const g   = data.filter(r => r.region === reg);
+    const tr_n = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
+    const pl_n = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    return [reg, g.length, tf(g), pct(tf(g),g.length), ty(g), pct(ty(g),g.length),
+            tp(g), tr_ref(g), tr_n, pct(tr_n,g.length), pl_n, pct(pl_n,g.length)];
   });
+  const rtotals = ['TOTAL', total, tf(data), pct(tf(data),total), ty(data), pct(ty(data),total),
+    tp(data), tr_ref(data), trained.length, pct(trained.length,total), placed.length, pct(placed.length,total)];
 
-  // Age group breakdown
-  const AGE_GROUPS = [[15,19,'15–19'],[20,24,'20–24'],[25,29,'25–29'],[30,35,'30–35'],[36,50,'36–50'],[51,99,'51+']];
-  const ageRows = AGE_GROUPS.map(([min, max, label]) => {
-    const g = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= min && a <= max; });
-    const f = g.filter(r => r.sex === 'Female').length;
-    return [label, g.length, pct(g.length, total), f, pct(f, g.length)];
+  const regionalSection = reportSection('&#x1F5FA; Regional Distribution', '#1e3a5f', '#eff6ff', summaryTable(
+    ['Region','Total','Female','F%','Youth','Y%','PWD','Refugee','Trained','Train%','Placed','Place%'],
+    [...regionRows, rtotals]
+  ));
+
+  // ── 4. Age band breakdown ────────────────────────────────────────────────────
+  const AGE_GROUPS = [[15,19,'15–19'],[20,24,'20–24'],[25,29,'25–29'],[30,35,'30–35'],[36,50,'36–50'],[51,120,'51+']];
+  const ageRows = AGE_GROUPS.map(([min,max,label]) => {
+    const g   = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= min && a <= max; });
+    const tr_n = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
+    const pl_n = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    return [label, g.length, pct(g.length,total), tf(g), pct(tf(g),g.length||1),
+            tr_n, pct(tr_n,g.length||1), pl_n, pct(pl_n,g.length||1)];
   });
   const ageUnknown = data.filter(r => !r.age || isNaN(Number(r.age))).length;
 
-  // Training outcomes
-  const byMode       = groupCount(trained, 'trainingMode').filter(([k]) => k !== '(blank)');
-  const byCompletion = groupCount(trained, 'completionStatus').filter(([k]) => k !== '(blank)');
+  const ageSection = reportSection('&#x1F465; Age Band Breakdown', '#4c1d95', '#faf5ff', `
+    ${summaryTable(['Age Band','Count','% Total','Female','F%','Trained','Train%','Placed','Place%'], ageRows)}
+    ${ageUnknown ? `<p style="font-size:0.63rem;color:#94a3b8;margin-top:0.3rem;">${ageUnknown} participant(s) with unknown age excluded from above.</p>` : ''}`);
 
-  // Placement outcomes
-  const bySector    = groupCount(placed, 'plSector').filter(([k]) => k !== '(blank)');
-  const byEmpType   = groupCount(placed, 'employmentType').filter(([k]) => k !== '(blank)');
-  const byEmployer  = groupCount(placed, 'employerName').filter(([k]) => k !== '(blank)');
-  const byIncome    = groupCount(placed, 'placementIncome').filter(([k]) => k !== '(blank)');
+  // ── 5. Training outcomes ─────────────────────────────────────────────────────
+  let trainingSection = '';
+  if (trained.length) {
+    const byMode       = groupCount(trained, 'trainingMode').filter(([k]) => k !== '(blank)');
+    const byCompletion = groupCount(trained, 'completionStatus').filter(([k]) => k !== '(blank)');
+    const bySector     = groupCount(trained, 'sector').filter(([k]) => k !== '(blank)');
+    const byPartner    = [...new Set(trained.map(r => r.implementingPartner).filter(Boolean))].sort();
+    const byRegion     = [...new Set(trained.map(r => r.region).filter(Boolean))].sort();
 
-  document.getElementById('reportContent').innerHTML = `
+    const trPartnerRows = byPartner.map(p => {
+      const g = trained.filter(r => r.implementingPartner === p);
+      return [p, g.length, pct(g.length, trained.length), tf(g), pct(tf(g),g.length||1), ty(g), pct(ty(g),g.length||1), tp(g)];
+    });
+    const trRegionRows = byRegion.map(reg => {
+      const g = trained.filter(r => r.region === reg);
+      return [reg, g.length, pct(g.length, trained.length), tf(g), pct(tf(g),g.length||1), ty(g), pct(ty(g),g.length||1)];
+    });
 
-    <!-- Summary header -->
-    <div style="font-size:0.7rem;color:#64748b;margin-bottom:1rem;padding:0.6rem 0.85rem;background:#f8fafc;border-radius:0.5rem;line-height:1.7;">
-      <strong>${total}</strong> participant${total !== 1 ? 's' : ''} &bull;
-      Registered: <strong>${data.filter(r => r.participantInfoStatus === 'submitted').length}</strong> &bull;
-      Trained: <strong>${trained.length}</strong> (${pct(trained.length, total)}) &bull;
-      Placed: <strong>${placed.length}</strong> (${pct(placed.length, total)}) &bull;
-      CV Uploaded: <strong>${cvUploaded}</strong> &bull; No CV: <strong>${noCv}</strong>
-    </div>
-
-    <!-- Partner summary -->
-    <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#064e3b;letter-spacing:0.07em;margin-bottom:0.5rem;">Partner Summary</p>
-    ${summaryTable(
-      ['Partner','Total','Female','Youth','PWD','Refugee','Displaced','Trained','Trained%','Placed','Placed%'],
-      [...partnerRows, partnerTotals]
-    )}
-
-    <!-- Regional distribution -->
-    <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#1e3a5f;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Regional Distribution</p>
-    ${summaryTable(['Region','Total','Female','Female%','Youth','Youth%','Trained','Placed'], regionRows)}
-
-    <!-- Age group breakdown -->
-    <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#7c3aed;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Age Group Breakdown</p>
-    <div style="display:grid;grid-template-columns:auto 1fr;gap:0 1rem;align-items:center;">
-      ${summaryTable(['Age Band','Count','% Total','Female','Female%'], ageRows)}
-    </div>
-    ${ageUnknown ? `<p style="font-size:0.65rem;color:#94a3b8;margin-top:0.25rem;">${ageUnknown} participant(s) with unknown age not included above.</p>` : ''}
-
-    <!-- Training outcomes -->
-    ${trained.length ? `
-    <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#4c1d95;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Training Outcomes (${trained.length} trained)</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-      <div>
-        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">By Mode</p>
-        ${summaryTable(['Mode','Count','%'], byMode.length ? byMode.map(([k,v]) => [k, v, pct(v, trained.length)]) : [['No data','-','-']])}
+    trainingSection = reportSection('&#x1F393; Training Outcomes', '#065f46', '#f0fdf4', `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.5rem;margin-bottom:1rem;">
+        ${reportKpi(trained.length, 'Trained',      '#10b981')}
+        ${reportKpi(tf(trained),    'Female',        '#ec4899', pct(tf(trained), trained.length))}
+        ${reportKpi(ty(trained),    'Youth 15–35',   '#6366f1', pct(ty(trained), trained.length))}
+        ${reportKpi(tp(trained),    'PWD',           '#f59e0b', pct(tp(trained), trained.length))}
       </div>
-      <div>
-        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">Completion Status</p>
-        ${summaryTable(['Status','Count','%'], byCompletion.length ? byCompletion.map(([k,v]) => [k, v, pct(v, trained.length)]) : [['No data','-','-']])}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+        <div>
+          <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">By Mode</p>
+          ${summaryTable(['Mode','Count','%'], byMode.length ? byMode.map(([k,v]) => [k,v,pct(v,trained.length)]) : [['No data','–','–']])}
+        </div>
+        <div>
+          <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">Completion Status</p>
+          ${summaryTable(['Status','Count','%'], byCompletion.length ? byCompletion.map(([k,v]) => [k,v,pct(v,trained.length)]) : [['No data','–','–']])}
+        </div>
       </div>
-    </div>` : ''}
+      ${bySector.length ? `<p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">By Sector</p>
+        ${summaryTable(['Sector','Count','%'], bySector.map(([k,v]) => [k,v,pct(v,trained.length)]))}` : ''}
+      ${trPartnerRows.length > 1 ? `<p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin:0.75rem 0 0.35rem;">By Partner</p>
+        ${summaryTable(['Partner','Trained','% of Total','Female','F%','Youth','Y%','PWD'], trPartnerRows)}` : ''}
+      ${trRegionRows.length > 1 ? `<p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin:0.75rem 0 0.35rem;">By Region</p>
+        ${summaryTable(['Region','Trained','% of Total','Female','F%','Youth','Y%'], trRegionRows)}` : ''}
+    `);
+  }
 
-    <!-- Placement outcomes -->
-    ${placed.length ? `
-    <p style="font-size:0.63rem;font-weight:900;text-transform:uppercase;color:#064e3b;letter-spacing:0.07em;margin:1.25rem 0 0.5rem;">Placement Outcomes (${placed.length} placed)</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:0.75rem;">
-      <div>
-        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">By Sector</p>
-        ${summaryTable(['Sector','Count','%'], bySector.map(([k,v]) => [k, v, pct(v, placed.length)]))}
+  // ── 6. Placement outcomes ────────────────────────────────────────────────────
+  let placementSection = '';
+  if (placed.length) {
+    const bySector    = groupCount(placed, 'plSector').length ? groupCount(placed, 'plSector') : groupCount(placed, 'sector');
+    const byEmpType   = groupCount(placed, 'employmentType').filter(([k]) => k !== '(blank)');
+    const byContract  = groupCount(placed, 'contractType').filter(([k]) => k !== '(blank)');
+    const byEmployer  = groupCount(placed, 'employerName').filter(([k]) => k !== '(blank)');
+    const byIncome    = groupCount(placed, 'placementIncome').filter(([k]) => k !== '(blank)');
+    const byPartner   = [...new Set(placed.map(r => r.implementingPartner).filter(Boolean))].sort();
+    const byRegion    = [...new Set(placed.map(r => r.workRegion || r.region).filter(Boolean))].sort();
+
+    const plPartnerRows = byPartner.map(p => {
+      const g = placed.filter(r => r.implementingPartner === p);
+      return [p, g.length, pct(g.length,placed.length), tf(g), pct(tf(g),g.length||1), ty(g), pct(ty(g),g.length||1), tp(g)];
+    });
+    const plRegionRows = byRegion.map(reg => {
+      const g = placed.filter(r => (r.workRegion || r.region) === reg);
+      return [reg, g.length, pct(g.length,placed.length), tf(g), pct(tf(g),g.length||1), ty(g), pct(ty(g),g.length||1)];
+    });
+
+    placementSection = reportSection('&#x1F4BC; Placement Outcomes', '#1e40af', '#eff6ff', `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.5rem;margin-bottom:1rem;">
+        ${reportKpi(placed.length,  'Placed',       '#3b82f6')}
+        ${reportKpi(tf(placed),     'Female',        '#ec4899', pct(tf(placed), placed.length))}
+        ${reportKpi(ty(placed),     'Youth 15–35',   '#6366f1', pct(ty(placed), placed.length))}
+        ${reportKpi(tp(placed),     'PWD',           '#f59e0b', pct(tp(placed), placed.length))}
       </div>
-      <div>
-        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">Employment Type</p>
-        ${summaryTable(['Type','Count','%'], byEmpType.map(([k,v]) => [k, v, pct(v, placed.length)]))}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+        <div>
+          <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">By Sector</p>
+          ${summaryTable(['Sector','Count','%'], bySector.filter(([k])=>k!=='(blank)').map(([k,v]) => [k,v,pct(v,placed.length)]))}
+        </div>
+        <div>
+          <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">Employment Type</p>
+          ${summaryTable(['Type','Count','%'], byEmpType.map(([k,v]) => [k,v,pct(v,placed.length)]))}
+        </div>
       </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-      <div>
-        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">By Employer</p>
-        ${summaryTable(['Employer','Count','%'], byEmployer.map(([k,v]) => [k, v, pct(v, placed.length)]))}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+        ${byContract.length ? `<div>
+          <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">Contract Type</p>
+          ${summaryTable(['Contract','Count','%'], byContract.map(([k,v]) => [k,v,pct(v,placed.length)]))}
+        </div>` : ''}
+        ${byEmployer.length ? `<div>
+          <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">Top Employers</p>
+          ${summaryTable(['Employer','Count','%'], byEmployer.slice(0,10).map(([k,v]) => [k,v,pct(v,placed.length)]))}
+        </div>` : ''}
       </div>
-      <div>
-        <p style="font-size:0.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:0.35rem;">Income Band (GHS)</p>
-        ${summaryTable(['Income','Count','%'], byIncome.map(([k,v]) => [k, v, pct(v, placed.length)]))}
-      </div>
-    </div>` : ''}`;
+      ${plPartnerRows.length > 1 ? `<p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">By Partner</p>
+        ${summaryTable(['Partner','Placed','% of Total','Female','F%','Youth','Y%','PWD'], plPartnerRows)}` : ''}
+      ${plRegionRows.length > 1 ? `<p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin:0.75rem 0 0.35rem;">By Work Region</p>
+        ${summaryTable(['Region','Placed','% of Total','Female','F%','Youth','Y%'], plRegionRows)}` : ''}
+    `);
+
+    // ── 7. Income analysis (only if income data exists) ──────────────────────
+    if (byIncome.length) {
+      const baselineIncome = groupCount(data.filter(r => r.monthlyIncome), 'monthlyIncome').filter(([k]) => k !== '(blank)');
+      placementSection += reportSection('&#x1F4B0; Income Analysis', '#92400e', '#fffbeb', `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+          <div>
+            <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">Post-Placement Income (GHS)</p>
+            ${summaryTable(['Income Band','Count','%'], byIncome.map(([k,v]) => [k,v,pct(v,placed.length)]))}
+          </div>
+          ${baselineIncome.length ? `<div>
+            <p style="font-size:0.6rem;font-weight:900;text-transform:uppercase;color:#94a3b8;margin-bottom:0.35rem;">Baseline Income (pre-programme)</p>
+            ${summaryTable(['Income Band','Count','%'], baselineIncome.map(([k,v]) => [k,v,pct(v,total)]))}
+          </div>` : ''}
+        </div>
+      `);
+    }
+  }
+
+  document.getElementById('reportContent').innerHTML =
+    summaryBar +
+    partnerSection +
+    regionalSection +
+    ageSection +
+    trainingSection +
+    placementSection;
+}
+
+function reportSection(title, color, bg, content) {
+  return `<div style="background:${bg};border-radius:0.75rem;padding:0.85rem 1rem;margin-bottom:1.25rem;border-left:3px solid ${color};">
+    <p style="font-size:0.72rem;font-weight:900;text-transform:uppercase;color:${color};letter-spacing:0.07em;margin:0 0 0.75rem;">${title}</p>
+    ${content}
+  </div>`;
+}
+
+function reportKpi(value, label, color, sub) {
+  return `<div style="background:#fff;border-radius:0.5rem;padding:0.6rem 0.5rem;text-align:center;border:1px solid #e2e8f0;">
+    <div style="font-size:1.3rem;font-weight:900;color:${color};line-height:1.1;">${value}</div>
+    ${sub ? `<div style="font-size:0.68rem;color:${color};font-weight:700;">${sub}</div>` : ''}
+    <div style="font-size:0.68rem;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-top:0.1rem;">${label}</div>
+  </div>`;
 }
 
 function summaryTable(headers, rows) {
   if (!rows.length) return '<p style="font-size:0.7rem;color:#94a3b8;margin-bottom:0.5rem;">No data</p>';
   const head = headers.map(h =>
-    `<th style="padding:0.3rem 0.5rem;text-align:left;font-size:0.58rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">${h}</th>`
+    `<th style="padding:0.35rem 0.5rem;text-align:left;font-size:0.68rem;font-weight:900;text-transform:uppercase;color:#64748b;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">${h}</th>`
   ).join('');
   const body = rows.map((row, ri) => {
     const isTotal = String(row[0]).toUpperCase() === 'TOTAL';
     const rowStyle = isTotal ? 'background:#f0f9ff;border-top:2px solid #e2e8f0;' : 'border-bottom:1px solid #f1f5f9;';
     return '<tr style="' + rowStyle + '">' + row.map((cell, ci) =>
-      `<td style="padding:0.3rem 0.5rem;font-size:0.7rem;color:${isTotal ? '#0f172a' : (ci === 0 ? '#374151' : '#1e293b')};font-weight:${isTotal || ci === 0 ? '700' : '400'};">${escapeHtml(String(cell ?? ''))}</td>`
+      `<td style="padding:0.35rem 0.5rem;font-size:0.75rem;color:${isTotal ? '#0f172a' : (ci === 0 ? '#374151' : '#1e293b')};font-weight:${isTotal || ci === 0 ? '700' : '400'};">${escapeHtml(String(cell ?? ''))}</td>`
     ).join('') + '</tr>';
   }).join('');
   return `<div style="overflow-x:auto;margin-bottom:0.5rem;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
@@ -2347,6 +2622,267 @@ function updateOnlineStatus() {
     setTimeout(() => hideStatus(), 3000);
   } else {
     showStatus(pending ? `Offline — ${pending} record(s) saved locally` : 'Offline — new data will be saved locally', 'offline');
+  }
+}
+
+// ===== DATA CORRECTION =====
+let editModalParticipant = null;
+
+const EDIT_MODAL_FIELDS = [
+  { key:'surname',            label:'Surname',             type:'text' },
+  { key:'firstName',          label:'First Name',          type:'text' },
+  { key:'otherNames',         label:'Other Name(s)',        type:'text' },
+  { key:'telephone',          label:'Phone',               type:'tel'  },
+  { key:'sex',                label:'Sex',                 type:'select', opts:['Male','Female'] },
+  { key:'dob',                label:'Date of Birth',       type:'date' },
+  { key:'age',                label:'Age',                 type:'number' },
+  { key:'idType',             label:'ID Type',             type:'select', opts:['Ghana Card',"Voter's ID"] },
+  { key:'ghanaCardId',        label:'Ghana Card ID',       type:'text' },
+  { key:'voterId',            label:'Voter ID',            type:'text' },
+  { key:'implementingPartner',label:'Implementing Partner',type:'select', opts:['Jobberman','Agrico','YouthEmpower','SkillsGH','Other'] },
+  { key:'region',             label:'Region',              type:'text' },
+  { key:'district',           label:'District',            type:'text' },
+  { key:'community',          label:'Community',           type:'text' },
+  { key:'locationStatus',     label:'Location Status',     type:'select', opts:['Urban','Rural','Peri-Urban'] },
+  { key:'educationLevel',     label:'Education Level',     type:'select', opts:['None','Primary','JHS','SHS','College','Vocational','Technical','University'] },
+  { key:'employmentStatus',   label:'Employment Status',   type:'select', opts:['Unemployed','Employed','Casual Worker','Self-Employed','Student'] },
+  { key:'disabilityStatus',   label:'Disability Status',   type:'select', opts:['No','Yes'] },
+  { key:'refugeeStatus',      label:'Refugee Status',      type:'select', opts:['No','Yes'] },
+  { key:'adminNotes',         label:'Admin Notes',         type:'textarea' }
+];
+
+function loadCorrection() {
+  renderPendingQueue();
+  const data = formState.masterSheetData || [];
+  if (data.length) renderCorrectionQuality(data);
+  else document.getElementById('correctionQualityPanel').innerHTML =
+    '<p style="font-size:0.78rem;color:#94a3b8;">No data loaded — click Refresh.</p>';
+}
+
+function refreshCorrection() {
+  if (!formState.isAdmin) return;
+  document.getElementById('pendingQueueList').textContent = 'Refreshing…';
+  loadSheetData({ silent: true }).then(() => {
+    renderPendingQueue();
+    renderCorrectionQuality(formState.masterSheetData || []);
+    showToast('Data Correction refreshed.', 'success');
+  }).catch(err => showToast('Refresh failed: ' + err.message, 'error'));
+}
+
+// ── Pending queue ────────────────────────────────────────────────────────────
+function renderPendingQueue() {
+  const el = document.getElementById('pendingQueueList');
+  if (!el) return;
+  const queue = getPendingSubmissions();
+  if (!queue.length) {
+    el.innerHTML = '<span style="color:#10b981;font-weight:700;">&#10003; No pending submissions — all records are synced.</span>';
+    document.getElementById('retryAllBtn').style.display = 'none';
+    return;
+  }
+  document.getElementById('retryAllBtn').style.display = '';
+  el.innerHTML = `
+    <p style="font-size:0.72rem;color:#92400e;font-weight:700;margin-bottom:0.5rem;">${queue.length} record(s) waiting to sync to Google Sheets:</p>
+    ${queue.map(item => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0;border-bottom:1px solid #fde68a;">
+        <div>
+          <span style="font-family:monospace;font-size:0.7rem;color:#92400e;">${escapeHtml(item.data?.participantId || item.id || '—')}</span>
+          <span style="font-size:0.65rem;color:#b45309;margin-left:0.5rem;">${escapeHtml(item.data?.collectorName || '')} &bull; ${escapeHtml(item.queuedAt ? item.queuedAt.slice(0,10) : '')}</span>
+        </div>
+        <span style="font-size:0.65rem;padding:0.15rem 0.4rem;border-radius:999px;background:${item.data?.syncStatus === 'queued' ? '#fef3c7' : '#fee2e2'};color:${item.data?.syncStatus === 'queued' ? '#92400e' : '#991b1b'};">${escapeHtml(item.data?.syncStatus || 'pending')}</span>
+      </div>`).join('')}
+    <p style="font-size:0.65rem;color:#b45309;margin-top:0.5rem;">Click "Retry All" to attempt syncing these records now. Make sure you have internet access.</p>`;
+}
+
+async function retryAllPending() {
+  const btn = document.getElementById('retryAllBtn');
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  try {
+    await syncPendingSubmissions();
+    renderPendingQueue();
+    showToast('Sync complete.', 'success');
+  } catch (err) {
+    showToast('Sync failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↺ Retry All';
+  }
+}
+
+// ── Data quality panel (with Fix buttons) ────────────────────────────────────
+function renderCorrectionQuality(data) {
+  const el = document.getElementById('correctionQualityPanel');
+  if (!el) return;
+  const now = Date.now();
+  const fullName = r => ((r.surname || '') + ' ' + (r.firstName || '')).trim() || '—';
+
+  const mismatchPx  = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH'));
+  const stuckPx     = data.filter(r => {
+    if (r.participantInfoStatus === 'submitted') return false;
+    const d = r.consentSubmittedAt ? new Date(r.consentSubmittedAt) : null;
+    return d && (now - d.getTime()) / 86400000 > 7;
+  });
+  const badAgePx    = data.filter(r => r.participantInfoStatus === 'submitted' && r.age !== '' && r.age !== undefined && Number(r.age) < 10);
+  const noNamePx    = data.filter(r => r.participantInfoStatus === 'submitted' && !r.surname && !r.firstName);
+  const noPartnerPx = data.filter(r => r.participantInfoStatus === 'submitted' && !r.implementingPartner);
+
+  const total = mismatchPx.length + stuckPx.length + badAgePx.length + noNamePx.length + noPartnerPx.length;
+
+  if (!total) {
+    el.innerHTML = '<div style="padding:0.75rem;background:#f0fdf4;border-radius:0.5rem;color:#065f46;font-size:0.8rem;font-weight:700;">&#10003; No data quality issues detected.</div>';
+    return;
+  }
+
+  const fixBtn = (pid) => `<button onclick="openEditModal('${escapeHtml(pid)}')" style="font-size:0.62rem;padding:0.15rem 0.5rem;background:#5B45E8;color:#fff;border:none;border-radius:0.25rem;cursor:pointer;flex-shrink:0;">Fix</button>`;
+
+  const issueTable = (headers, rows) => `
+    <div style="overflow-x:auto;margin-top:0.35rem;max-height:180px;overflow-y:auto;border:1px solid #fed7aa;border-radius:0.35rem;">
+      <table style="width:100%;border-collapse:collapse;font-size:0.67rem;">
+        <thead><tr>${headers.map(h => `<th style="padding:0.2rem 0.5rem;text-align:left;background:#fff7ed;border-bottom:1px solid #fed7aa;white-space:nowrap;color:#92400e;font-weight:900;">${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>
+    </div>`;
+
+  const issueSection = (icon, color, title, tableHtml) => `
+    <details style="margin-bottom:0.6rem;border:1px solid #e2e8f0;border-radius:0.5rem;padding:0.5rem 0.75rem;">
+      <summary style="cursor:pointer;font-size:0.75rem;font-weight:700;color:${color};list-style:none;display:flex;align-items:center;gap:0.4rem;">
+        <span>${icon}</span><span>${title}</span><span style="margin-left:auto;font-size:0.6rem;color:#94a3b8;">&#9654; expand</span>
+      </summary>
+      ${tableHtml}
+    </details>`;
+
+  const row = (cells) => '<tr>' + cells.map(c => `<td style="padding:0.2rem 0.5rem;border-bottom:1px solid #f1f5f9;">${c}</td>`).join('') + '</tr>';
+
+  let html = `<p style="font-size:0.72rem;font-weight:700;color:#92400e;margin-bottom:0.75rem;">${total} participant(s) need attention:</p>`;
+
+  if (mismatchPx.length) html += issueSection('🔴', '#991b1b', `${mismatchPx.length} name mismatch${mismatchPx.length > 1 ? 'es' : ''} — consent vs. registered`,
+    issueTable(['HAPPY ID','Consent Name','Registered Name','Action'],
+      mismatchPx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(r.consentName||'—'), escapeHtml(fullName(r)), fixBtn(r.participantId)]))));
+
+  if (stuckPx.length) html += issueSection('🟡', '#92400e', `${stuckPx.length} consented 7+ days ago, not yet registered`,
+    issueTable(['HAPPY ID','Name','Consented','Days','Action'],
+      stuckPx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(r.consentName||'—'), r.consentSubmittedAt ? r.consentSubmittedAt.slice(0,10) : '—', r.consentSubmittedAt ? Math.floor((now - new Date(r.consentSubmittedAt).getTime()) / 86400000) : '—', fixBtn(r.participantId)]))));
+
+  if (badAgePx.length) html += issueSection('🔴', '#991b1b', `${badAgePx.length} invalid date of birth (age < 10)`,
+    issueTable(['HAPPY ID','Name','Age','DOB','Action'],
+      badAgePx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(fullName(r)), r.age||'—', r.dob||'—', fixBtn(r.participantId)]))));
+
+  if (noNamePx.length) html += issueSection('🟡', '#92400e', `${noNamePx.length} registered with no name`,
+    issueTable(['HAPPY ID','Region','Partner','Action'],
+      noNamePx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(r.region||'—'), escapeHtml(r.implementingPartner||'—'), fixBtn(r.participantId)]))));
+
+  if (noPartnerPx.length) html += issueSection('🟠', '#92400e', `${noPartnerPx.length} registered with no implementing partner`,
+    issueTable(['HAPPY ID','Name','Region','Action'],
+      noPartnerPx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(fullName(r)), escapeHtml(r.region||'—'), fixBtn(r.participantId)]))));
+
+  el.innerHTML = html;
+}
+
+// ── Participant search for editing ───────────────────────────────────────────
+async function searchForEdit() {
+  const q   = (document.getElementById('correctionSearchInput')?.value || '').trim();
+  const out = document.getElementById('correctionSearchResults');
+  if (!q) return;
+  out.innerHTML = '<p style="font-size:0.75rem;color:#94a3b8;">Searching…</p>';
+  try {
+    const result = await apiAction('getParticipantByLookup', { query: q });
+    if (result.status === 'MULTIPLE') {
+      out.innerHTML = result.participants.map(p => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0.75rem;border:1px solid #e2e8f0;border-radius:0.4rem;margin-bottom:0.4rem;background:#fff;">
+          <div>
+            <span style="font-weight:700;font-size:0.8rem;">${escapeHtml(p.surname + ', ' + p.firstName)}</span>
+            <span style="font-family:monospace;font-size:0.67rem;color:#64748b;margin-left:0.5rem;">${escapeHtml(p.participantId)}</span>
+          </div>
+          <button onclick="openEditModal('${escapeHtml(p.participantId)}')" style="font-size:0.72rem;padding:0.3rem 0.75rem;background:#5B45E8;color:#fff;border:none;border-radius:0.35rem;cursor:pointer;">Edit</button>
+        </div>`).join('');
+    } else if (result.participant) {
+      const p = result.participant;
+      out.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0.6rem 0.75rem;border:1px solid #c7d2fe;border-radius:0.4rem;background:#eef2ff;">
+          <div>
+            <span style="font-weight:700;font-size:0.82rem;">${escapeHtml((p.surname||'') + ' ' + (p.firstName||''))}</span>
+            <span style="font-family:monospace;font-size:0.67rem;color:#5B45E8;margin-left:0.5rem;">${escapeHtml(p.participantId)}</span>
+            <span style="font-size:0.65rem;color:#64748b;margin-left:0.5rem;">${escapeHtml(p.currentStage||'')}</span>
+          </div>
+          <button onclick="openEditModal('${escapeHtml(p.participantId)}')" style="font-size:0.72rem;padding:0.3rem 0.75rem;background:#5B45E8;color:#fff;border:none;border-radius:0.35rem;cursor:pointer;">Edit</button>
+        </div>`;
+    }
+  } catch (err) {
+    out.innerHTML = `<p style="font-size:0.75rem;color:#ef4444;">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// ── Edit modal ───────────────────────────────────────────────────────────────
+async function openEditModal(participantId) {
+  try {
+    const result = await apiAction('getParticipantById', { participantId });
+    editModalParticipant = result.participant;
+    document.getElementById('editModalId').textContent = participantId;
+
+    const fieldsEl = document.getElementById('editModalFields');
+    fieldsEl.innerHTML = EDIT_MODAL_FIELDS.map(f => {
+      const val = escapeHtml(String(editModalParticipant[f.key] || ''));
+      if (f.type === 'select') {
+        const opts = f.opts.map(o => `<option value="${escapeHtml(o)}"${editModalParticipant[f.key] === o ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
+        return `<div style="grid-column:${f.type === 'textarea' ? 'span 2' : ''}">
+          <label style="font-size:0.65rem;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:0.2rem;">${f.label}</label>
+          <select data-key="${f.key}" style="width:100%;padding:0.4rem 0.5rem;border:1px solid #e2e8f0;border-radius:0.35rem;font-size:0.78rem;">
+            <option value="">(blank)</option>${opts}
+          </select></div>`;
+      }
+      if (f.type === 'textarea') {
+        return `<div style="grid-column:span 2">
+          <label style="font-size:0.65rem;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:0.2rem;">${f.label}</label>
+          <textarea data-key="${f.key}" rows="2" style="width:100%;padding:0.4rem 0.5rem;border:1px solid #e2e8f0;border-radius:0.35rem;font-size:0.78rem;resize:vertical;">${val}</textarea></div>`;
+      }
+      return `<div>
+        <label style="font-size:0.65rem;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:0.2rem;">${f.label}</label>
+        <input type="${f.type}" data-key="${f.key}" value="${val}" style="width:100%;padding:0.4rem 0.5rem;border:1px solid #e2e8f0;border-radius:0.35rem;font-size:0.78rem;"></div>`;
+    }).join('');
+
+    document.getElementById('editModalError').classList.add('hidden');
+    document.getElementById('editParticipantModal').classList.remove('hidden');
+  } catch (err) {
+    showToast('Could not load participant: ' + err.message, 'error');
+  }
+}
+
+function closeEditModal() {
+  document.getElementById('editParticipantModal').classList.add('hidden');
+  editModalParticipant = null;
+}
+
+async function saveEditModal() {
+  if (!editModalParticipant) return;
+  const btn = document.getElementById('editModalSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const errEl = document.getElementById('editModalError');
+  errEl.classList.add('hidden');
+
+  const updates = {};
+  document.querySelectorAll('#editModalFields [data-key]').forEach(el => {
+    updates[el.dataset.key] = el.value;
+  });
+
+  try {
+    await apiAction('adminUpdateParticipant', {
+      adminPassword: formState.adminPassword,
+      participantId: editModalParticipant.participantId,
+      actor: formState.collectorName || 'admin',
+      updates
+    });
+    // Update local master sheet cache
+    const idx = (formState.masterSheetData || []).findIndex(r => r.participantId === editModalParticipant.participantId);
+    if (idx >= 0) Object.assign(formState.masterSheetData[idx], updates);
+    closeEditModal();
+    // Refresh correction panel with updated data
+    if (formState.masterSheetData?.length) renderCorrectionQuality(formState.masterSheetData);
+    showToast('Participant record updated.', 'success');
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save Changes';
   }
 }
 

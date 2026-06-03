@@ -362,7 +362,11 @@ function saveParticipantInfo(payload, explicitSection) {
     continuationTokenHash:     existing.continuationTokenHash || tokenHash,
     // Never allow a payload to overwrite an already-assigned HAMIS ID
     hamisId:                   existing.hamisId || incoming.hamisId || '',
-    participantInfoStatus:     'submitted',
+    // Only mark registered if this submission actually includes participant info.
+    // Capacity-only and placement-only submissions should not flip a consent-only record to 'submitted'.
+    participantInfoStatus: (accessMode === 'capacity-existing' || explicitSection === 'capacity' || explicitSection === 'placement')
+      ? (existing.participantInfoStatus || 'not_started')
+      : 'submitted',
     capacityBuildingStatus:    capacityStatus,
     jobPlacementStatus:        placementStatus,
     currentStage:              resolveStage(capacityStatus, placementStatus, incoming.employerName || existing.employerName),
@@ -455,7 +459,7 @@ function appendRegistrationData(record, explicitSection, accessMode) {
       if (record.placedByPartner   === 'Yes') appendJobPlacement(record);
     } else if (accessMode === 'capacity-new') {
       appendParticipantInfo(record);
-      appendCapacityBuilding(record);
+      if (record.trainedByPartner === 'Yes') appendCapacityBuilding(record);
     } else if (accessMode === 'capacity-existing' || explicitSection === 'capacity') {
       appendCapacityBuilding(record);
     } else if (explicitSection === 'placement') {
@@ -618,6 +622,16 @@ function adminUpdateParticipant(payload) {
   updates.lastUpdatedAt = new Date().toISOString();
   updates.lastUpdatedBy = payload.actor || 'admin';
   updateRow(master, headers, row, updates);
+
+  // Re-read the full updated record and append a correction row to the sub-sheets
+  // so the Participant Information, Capacity Building, and Job Placement tabs stay current.
+  try {
+    const updatedRecord = rowToObject(headers, master.getRange(row, 1, 1, headers.length).getValues()[0]);
+    appendParticipantInfo(updatedRecord);
+  } catch (err) {
+    appendAudit({ action: 'adminUpdateParticipant_subsheetFailed', section: 'data', notes: err.message });
+  }
+
   appendAudit({
     participantId: payload.participantId,
     actorType: 'staff',
@@ -934,7 +948,9 @@ function fromSheetValue(v) {
 // ─── STATUS HELPERS ───────────────────────────────────────────────────────────
 function resolveCapacityStatus(existing, incoming, explicitSection, accessMode) {
   if (existing.capacityBuildingStatus === 'submitted') return 'submitted';
-  if (explicitSection === 'capacity' || accessMode === 'capacity-existing' || accessMode === 'capacity-new') return 'submitted';
+  if (explicitSection === 'capacity' || accessMode === 'capacity-existing') return 'submitted';
+  // capacity-new: only mark submitted if the participant was actually trained
+  if (accessMode === 'capacity-new' && incoming.trainedByPartner === 'Yes') return 'submitted';
   if (accessMode === 'admin' && incoming.trainedByPartner === 'Yes') return 'submitted';
   return existing.capacityBuildingStatus || 'not_started';
 }
