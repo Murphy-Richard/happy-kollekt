@@ -689,42 +689,89 @@ function showRegistrationUpdateBanner(p) {
 }
 
 async function loadParticipantForPlacement() {
-  const pid   = document.getElementById('placementLookupId').value.trim().toUpperCase();
-  const errEl = document.getElementById('placementLookupError');
+  const query  = document.getElementById('placementLookupId').value.trim();
+  const errEl  = document.getElementById('placementLookupError');
+  const matchEl = document.getElementById('placementNameMatchList');
   errEl.classList.add('hidden');
-  if (!pid) {
-    errEl.textContent = 'Please enter a Participant ID.';
+  matchEl.classList.add('hidden');
+  if (!query) {
+    errEl.textContent = 'Please enter a name, HAPPY ID, or phone number.';
     errEl.classList.remove('hidden');
     return;
   }
   const btn = document.querySelector('#placementLookupScreen button[onclick="loadParticipantForPlacement()"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching…'; }
   try {
-    const result = await apiAction('getParticipantById', { participantId: pid });
-    if (!result?.participant?.participantId) throw new Error('Participant not found.');
-    const p = result.participant;
-    if (p.jobPlacementStatus === 'submitted') {
-      throw new Error('This participant has already been placed (jobPlacementStatus = submitted).');
+    const result = await apiAction('getParticipantByLookup', { query });
+
+    if (result.status === 'MULTIPLE') {
+      // Show pick list — let admin choose the right person
+      matchEl.innerHTML = `
+        <p style="font-size:0.72rem;font-weight:700;color:#065f46;padding:0.5rem 0.75rem;background:#f0fdf4;border-bottom:1px solid #d1fae5;">
+          ${result.participants.length} matches — tap the correct participant:
+        </p>
+        ${result.participants.map(p => `
+          <button type="button" onclick="selectPlacementParticipant('${escapeHtml(p.participantId)}')"
+            style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:0.6rem 0.75rem;background:#fff;border:none;border-bottom:1px solid #f1f5f9;cursor:pointer;text-align:left;"
+            onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='#fff'">
+            <div>
+              <div style="font-weight:700;font-size:0.8rem;color:#1e293b;">${escapeHtml((p.surname || '') + (p.surname && p.firstName ? ', ' : '') + (p.firstName || ''))}</div>
+              <div style="font-size:0.67rem;color:#5B45E8;font-family:monospace;">${escapeHtml(p.participantId)}</div>
+            </div>
+            <div style="text-align:right;font-size:0.67rem;color:#94a3b8;">
+              <div>${escapeHtml(p.region || '')}</div>
+              <div>${escapeHtml(p.currentStage || '')}</div>
+            </div>
+          </button>`).join('')}`;
+      matchEl.classList.remove('hidden');
+      return;
     }
-    document.getElementById('placementLookupScreen').classList.add('hidden');
-    formState.accessMode = 'admin';
-    formState.consentName = p.consentName || '';
-    initializeForm();
-    prefillParticipantInfo(p);
-    lockSectionB();
-    // Show only participant info (read-only) + placement section
-    showSections({ A: true, B: true, C: false, D: true });
-    document.getElementById('view-form').classList.remove('hidden');
-    // Pre-tick "placed by partner" to open placement fields
-    document.querySelectorAll('input[name="pl_check"]').forEach(r => { r.checked = r.value === 'Yes'; });
-    togglePlacementFields(true);
-    showToast('Record loaded. Complete Section D and submit.', 'success');
+
+    // Single match — load directly
+    await openPlacementForm(result.participant);
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove('hidden');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Load Participant'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Search & Load →'; }
   }
+}
+
+async function selectPlacementParticipant(participantId) {
+  const errEl   = document.getElementById('placementLookupError');
+  const matchEl = document.getElementById('placementNameMatchList');
+  errEl.classList.add('hidden');
+  matchEl.classList.add('hidden');
+  const btn = document.querySelector('#placementLookupScreen button[onclick="loadParticipantForPlacement()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  try {
+    const result = await apiAction('getParticipantById', { participantId });
+    await openPlacementForm(result.participant);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Search & Load →'; }
+  }
+}
+
+function openPlacementForm(p) {
+  if (!p?.participantId) throw new Error('Participant not found.');
+  if (p.jobPlacementStatus === 'submitted') {
+    throw new Error('This participant has already been placed.');
+  }
+  document.getElementById('placementLookupScreen').classList.add('hidden');
+  formState.accessMode  = 'admin';
+  formState.consentName = p.consentName || '';
+  initializeForm();
+  prefillParticipantInfo(p);
+  lockSectionB();
+  showSections({ A: true, B: true, C: false, D: true });
+  document.getElementById('mainForm')?.classList.remove('hidden');
+  document.getElementById('view-form').classList.remove('hidden');
+  document.querySelectorAll('input[name="pl_check"]').forEach(r => { r.checked = r.value === 'Yes'; });
+  togglePlacementFields(true);
+  showToast('Record loaded. Complete Section D and submit.', 'success');
 }
 
 // ===== ADMIN SIDEBAR =====

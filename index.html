@@ -209,15 +209,17 @@
         <p style="color:#64748b;font-size:0.78rem;margin:0;">Enter a Participant ID to load their record.</p>
       </div>
     </div>
-    <label style="font-size:0.8rem;font-weight:700;display:block;margin-bottom:0.4rem;">Participant ID</label>
-    <input type="text" id="placementLookupId" placeholder="e.g. HAPPY-2026-000004"
+    <label style="font-size:0.8rem;font-weight:700;display:block;margin-bottom:0.4rem;">Name, HAPPY ID, or Phone</label>
+    <input type="text" id="placementLookupId" placeholder="e.g. Miriam, HAPPY-2026-000004, or 0244…"
       style="width:100%;padding:0.6rem 0.75rem;border:1.5px solid #cbd5e1;border-radius:0.5rem;font-size:0.85rem;box-sizing:border-box;margin-bottom:0.75rem;"
+      oninput="document.getElementById('placementNameMatchList')?.classList.add('hidden');document.getElementById('placementLookupError')?.classList.add('hidden');"
       onkeydown="if(event.key==='Enter') loadParticipantForPlacement()">
     <button type="button" onclick="loadParticipantForPlacement()"
-      style="width:100%;padding:0.7rem;background:#10b981;color:#fff;border:none;border-radius:0.5rem;font-weight:700;font-size:0.875rem;cursor:pointer;">
-      Load Participant
+      style="width:100%;padding:0.75rem;background:#10b981;color:#fff;border:none;border-radius:0.5rem;font-weight:700;font-size:0.875rem;cursor:pointer;min-height:48px;">
+      Search &amp; Load &#x2192;
     </button>
     <p id="placementLookupError" class="hidden" style="color:#ef4444;font-size:0.75rem;margin-top:0.5rem;"></p>
+    <div id="placementNameMatchList" class="hidden" style="margin-top:0.75rem;border:1px solid #d1fae5;border-radius:0.5rem;overflow:hidden;"></div>
   </div>
 
   <!-- REGISTRATION UPDATE LOOKUP SCREEN -->
