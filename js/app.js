@@ -194,9 +194,12 @@ function startNewParticipant() {
 }
 
 function showConsentStep() {
-  ['entryModeScreen','continueScreen',   'capacityEntryScreen','view-form'].forEach(id => {
+  ['entryModeScreen','continueScreen','capacityEntryScreen'].forEach(id => {
     document.getElementById(id)?.classList.add('hidden');
   });
+  // consentStep lives inside view-form — the parent must be visible
+  document.getElementById('mainForm')?.classList.add('hidden');
+  document.getElementById('view-form')?.classList.remove('hidden');
   document.getElementById('consentStep')?.classList.remove('hidden');
   setTimeout(setupConsentCanvas, 50);
   document.getElementById('consentVenue')?.focus();
@@ -370,6 +373,7 @@ function continueToRegistration() {
   initializeForm();
   if (formState.participant) prefillParticipantInfo(formState.participant);
   showSections({ A: true, B: true, C: false, D: false });
+  document.getElementById('mainForm')?.classList.remove('hidden');
   document.getElementById('view-form').classList.remove('hidden');
 }
 
@@ -378,6 +382,7 @@ function continueToRegistrationWithCapacity() {
   initializeForm();
   if (formState.participant) prefillParticipantInfo(formState.participant);
   showSections({ A: true, B: true, C: true, D: false });
+  document.getElementById('mainForm')?.classList.remove('hidden');
   document.getElementById('view-form').classList.remove('hidden');
 }
 
@@ -478,6 +483,20 @@ function lockSectionB() {
 }
 
 function prefillParticipantInfo(data) {
+  // When coming straight from consent, we only have consentName + telephone.
+  // Split consentName into surname / firstName so the registration fields fill in.
+  if (data.consentName && !data.surname && !data.firstName) {
+    const parts = String(data.consentName).trim().split(/\s+/);
+    data = Object.assign({}, data, {
+      surname:   parts[0]                   || '',
+      firstName: parts.slice(1).join(' ')   || ''
+    });
+  }
+  // consentPhone is the same value as telephone — map it across
+  if (data.consentPhone && !data.telephone) {
+    data = Object.assign({}, data, { telephone: data.consentPhone });
+  }
+
   const fields = [
     'participantId','hamisId','onboardingDate','implementingPartner','region','district',
     'community','locationStatus','surname','firstName','otherNames','sex','dob',
@@ -489,7 +508,7 @@ function prefillParticipantInfo(data) {
   ];
   fields.forEach(f => {
     const el = document.getElementById(f);
-    if (el && data[f] !== undefined) el.value = data[f];
+    if (el && data[f] !== undefined && data[f] !== '') el.value = data[f];
   });
   if (data.age) document.getElementById('age').value = data.age;
   if (data.participantTypeAge) document.getElementById('participantTypeAge').value = data.participantTypeAge;
