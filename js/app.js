@@ -3173,6 +3173,11 @@ async function batchGoToStep2() {
 
 function batchGoToStep1() { showBatchStep(1); }
 
+function batchBackToStep2() {
+  renderBatchParticipantList();
+  showBatchStep(2);
+}
+
 function batchGoToStep3() {
   if (!batchSelectedIds.size) { showToast('Select at least one participant.', 'error'); return; }
   renderBatchReview();
