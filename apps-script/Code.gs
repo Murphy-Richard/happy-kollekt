@@ -1044,8 +1044,8 @@ function getEligibleForPlacement(password) {
   const records = getRecords(master, headers);
   const eligible = records
     .filter(function(r) {
-      // Include all registered participants who have not yet been placed
-      return r.participantInfoStatus === 'submitted' && r.jobPlacementStatus !== 'submitted';
+      // Include all consented participants who have not yet been placed
+      return r.consentStatus === 'complete' && r.jobPlacementStatus !== 'submitted';
     })
     .map(function(r) {
       return {

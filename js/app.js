@@ -531,6 +531,8 @@ function setupEventListeners() {
   document.getElementById('mainForm').addEventListener('invalid', e => {
     showToast(`Please complete: ${getFieldLabel(e.target)}`, 'error');
   }, true);
+  const batchSearchEl = document.getElementById('batchSearchInput');
+  if (batchSearchEl) batchSearchEl.addEventListener('input', e => batchSearchParticipants(e.target.value));
 }
 
 // ===== ADMIN STAGE SELECTION (Entry tab) =====
