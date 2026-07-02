@@ -5,6 +5,7 @@ const CONFIG = {
   LOCAL_DB_KEY: 'happy_kollect_db',
   DEVICE_ID_KEY: 'happyKollectDeviceId',
   PARTNER_PREFIXES: { 'Jobberman':'JOB', 'Agrico':'AGR', 'YouthEmpower':'YOU', 'SkillsGH':'SKI', 'Other':'OTH' },
+  JOB_TYPE_OPTIONS: ['Management','Technical','Administrative','Skilled Trades','Support Services'],
   REGIONS: {
     "Greater Accra": ["Accra Metropolitan","Tema","Adenta","Ashaiman","Ga East","Ga West","Ga South","Ga Central","La Dade-Kotopon","Ledzokuku","Krowor","Ayawaso West","Ayawaso East","Ayawaso North","Okaikwei North","Ablekuma North","Ablekuma Central","Ablekuma West","Korle Klottey","Adabraka","Osu Klottey","Ningo-Prampram","Shai-Osudoku","Ada East","Ada West","Weija-Gbawe","Kpone-Katamanso"],
     "Ashanti": ["Kumasi Metropolitan","Obuasi Municipal","Ejisu","Bekwai","Mampong","Agona","Asokore Mampong","Suame","Bantama","Subin","Oforikrom","Old Tafo","Kwadaso","Nhyiaeso","Atwima Kwanwoma","Atwima Nwabiagya","Afigya Kwabre North","Afigya Kwabre South","Asante Akim Central","Asante Akim North","Asante Akim South","Bosome Freho","Bosomtwe","Ejura Sekyedumase","Juaben","Kwabre East","Offinso Municipal","Offinso North","Sekyere Central","Sekyere East","Sekyere South","Sekyere Afram Plains","Adansi North","Adansi South","Amansie Central","Amansie West","Ahafo Ano North","Ahafo Ano South"],
@@ -68,6 +69,26 @@ let formState = {
 };
 
 let db = JSON.parse(localStorage.getItem(CONFIG.LOCAL_DB_KEY)) || [];
+
+function isCompleteStatus(value) {
+  return value === 'complete' || value === 'submitted';
+}
+
+function isPlaced(record) {
+  return isCompleteStatus(record?.jobPlacementStatus);
+}
+
+function stageMessage(stage) {
+  return {
+    'registration': 'Consent taken - registration not yet started.',
+    'participant_information': 'Consent taken - registration not yet started.',
+    'registration_complete': 'Registration submitted - you can update it.',
+    'cv_upload': 'Registration complete - CV can be uploaded or deferred.',
+    'capacity_complete': 'Training complete - registration can still be corrected.',
+    'outcome_tracking': 'Participant has been placed - be careful editing registration data.',
+    'placement_complete': 'Participant is fully placed - be careful editing registration data.'
+  }[stage] || `Stage: ${stage}`;
+}
 
 // ===== INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', () => {
@@ -612,7 +633,7 @@ async function loadParticipantForRegistration() {
       'capacity_complete':     'Training complete — registration can still be corrected.',
       'placement_complete':    'Participant is fully placed — be careful editing registration data.'
     }[stage] || `Stage: ${stage}`;
-    showToast(statusMsg, stage === 'placement_complete' ? 'error' : 'info');
+    showToast(stageMessage(stage), (stage === 'placement_complete' || stage === 'outcome_tracking') ? 'error' : 'info');
 
     // Open the registration form pre-filled with existing data
     document.getElementById('registrationLookupScreen').classList.add('hidden');
@@ -759,7 +780,7 @@ async function selectPlacementParticipant(participantId) {
 
 function openPlacementForm(p) {
   if (!p?.participantId) throw new Error('Participant not found.');
-  if (p.jobPlacementStatus === 'submitted') {
+  if (isCompleteStatus(p.jobPlacementStatus)) {
     throw new Error('This participant has already been placed.');
   }
   document.getElementById('placementLookupScreen').classList.add('hidden');
@@ -948,21 +969,104 @@ function populateDistricts(regId, distId) {
 }
 
 // ===== CASCADE: Sector → Industry → Job Type → Job Role =====
-function populateJobTypeOptions(select) {
-  select.innerHTML = '<option value="">Select</option>';
-  ['Management','Technical','Administrative','Support'].forEach(type => {
+const JOB_ROLE_EXACT_CATEGORY = {
+  'BIM Coordinator':'Technical','Bullion Driver':'Skilled Trades','Bus Driver':'Skilled Trades',
+  'Contract Administrator':'Administrative','Delivery Driver':'Skilled Trades','Dispatcher':'Administrative',
+  'Environmental Coordinator':'Technical','Executive Housekeeper':'Support Services','Farm Administrator':'Administrative',
+  'Fire Management Officer':'Technical','Fleet Mechanic':'Skilled Trades','Freight Forwarder':'Administrative',
+  'Front Desk':'Administrative','HGV Driver':'Skilled Trades','Hospital Administrator':'Management',
+  'HR Business Partner':'Administrative','HR Coordinator':'Administrative','IT Helpdesk':'Support Services',
+  'Land Rights Coordinator':'Administrative','Livestock Hauler':'Skilled Trades','Logging Truck Driver':'Skilled Trades',
+  'Logistics Coordinator':'Administrative','Maintenance Engineer':'Skilled Trades','Medical Secretary':'Administrative',
+  'Mobile Money Coordinator':'Administrative','Post-Construction Cleaner':'Support Services','Relationship Manager':'Administrative',
+  'Room Attendant':'Support Services','Safety Officer':'Technical','Sales Associate':'Administrative',
+  'Shuttle Driver':'Skilled Trades','Supply Chain Coordinator':'Administrative','Systems Admin':'Technical',
+  'Tipper Driver':'Skilled Trades','Transport Safety Officer':'Technical','Trawler Deckhand':'Skilled Trades',
+  'Ventilation Officer':'Technical','WMS Admin':'Technical'
+};
+
+function normalizeJobType(value) {
+  return value === 'Support' ? 'Support Services' : value;
+}
+
+function resetOtherJobRole(selectId) {
+  const inputId = `${selectId}Other`;
+  const group = document.getElementById(`${selectId}OtherGroup`);
+  const input = document.getElementById(inputId);
+  if (group) group.classList.add('hidden');
+  if (input) {
+    input.value = '';
+    input.disabled = true;
+    input.required = false;
+  }
+}
+
+function resetSelect(select, placeholder = 'Select') {
+  select.innerHTML = `<option value="">${placeholder}</option>`;
+  select.disabled = true;
+  if (select.id) resetOtherJobRole(select.id);
+}
+
+function getIndustryRoles(sector, industry) {
+  return CONFIG.SECTOR_DATA[sector]?.[industry] || [];
+}
+
+function getJobTypesForIndustry(sector, industry) {
+  const types = new Set(getIndustryRoles(sector, industry).map(classifyJobRole));
+  return CONFIG.JOB_TYPE_OPTIONS.filter(type => types.has(type));
+}
+
+function populateJobTypeOptions(select, sector, industry) {
+  resetSelect(select);
+  getJobTypesForIndustry(sector, industry).forEach(type => {
     const opt = document.createElement('option');
     opt.value = type; opt.textContent = type;
     select.appendChild(opt);
   });
-  select.disabled = false;
+  select.disabled = select.options.length <= 1;
+}
+
+function populateRoleOptions(select, sector, industry, jobType) {
+  resetSelect(select);
+  const selectedType = normalizeJobType(jobType);
+  if (!(sector && industry && selectedType)) return;
+  const roles = getIndustryRoles(sector, industry)
+    .filter(role => classifyJobRole(role) === selectedType)
+    .sort((a, b) => a.localeCompare(b));
+  if (!roles.includes('Other')) roles.push('Other');
+  roles.forEach(role => {
+    const opt = document.createElement('option');
+    opt.value = role; opt.textContent = role;
+    select.appendChild(opt);
+  });
+  select.disabled = select.options.length <= 1;
+  toggleOtherJobRole(select.id, `${select.id}Other`);
+}
+
+function toggleOtherJobRole(selectId, inputId) {
+  const select = document.getElementById(selectId);
+  const input = document.getElementById(inputId);
+  const group = document.getElementById(`${selectId}OtherGroup`);
+  const isOther = select?.value === 'Other';
+  if (group) group.classList.toggle('hidden', !isOther);
+  if (input) {
+    input.disabled = !isOther;
+    input.required = Boolean(isOther && select?.required);
+    if (!isOther) input.value = '';
+  }
+}
+
+function getResolvedJobRole(selectId, inputId) {
+  const selected = document.getElementById(selectId)?.value || '';
+  if (selected !== 'Other') return selected;
+  return document.getElementById(inputId)?.value.trim() || '';
 }
 function populateIndustries() {
   const sector = document.getElementById('sector').value;
   const indSel = document.getElementById('industry');
   const typeSel = document.getElementById('jobType');
   const roleSel = document.getElementById('jobRole');
-  [indSel, typeSel, roleSel].forEach(s => { s.innerHTML = '<option value="">Select</option>'; s.disabled = true; });
+  [indSel, typeSel, roleSel].forEach(select => resetSelect(select));
   if (sector && CONFIG.SECTOR_DATA[sector]) {
     Object.keys(CONFIG.SECTOR_DATA[sector]).sort().forEach(ind => {
       const opt = document.createElement('option');
@@ -973,35 +1077,24 @@ function populateIndustries() {
   }
 }
 function populateJobTypes() {
+  const sector = document.getElementById('sector').value;
   const industry = document.getElementById('industry').value;
   const typeSel = document.getElementById('jobType');
-  document.getElementById('jobRole').innerHTML = '<option value="">Select</option>';
-  document.getElementById('jobRole').disabled = true;
-  if (industry) populateJobTypeOptions(typeSel);
+  resetSelect(document.getElementById('jobRole'));
+  if (industry) populateJobTypeOptions(typeSel, sector, industry);
 }
 function populateJobRoles() {
   const sector = document.getElementById('sector').value;
   const industry = document.getElementById('industry').value;
   const jobType = document.getElementById('jobType').value;
-  const roleSel = document.getElementById('jobRole');
-  roleSel.innerHTML = '<option value="">Select</option>';
-  if (sector && industry && jobType && CONFIG.SECTOR_DATA[sector]?.[industry]) {
-    CONFIG.SECTOR_DATA[sector][industry]
-      .filter(role => classifyJobRole(role) === jobType)
-      .forEach(role => {
-        const opt = document.createElement('option');
-        opt.value = role; opt.textContent = role;
-        roleSel.appendChild(opt);
-      });
-    roleSel.disabled = false;
-  }
+  populateRoleOptions(document.getElementById('jobRole'), sector, industry, jobType);
 }
 function populatePlacementIndustries() {
   const sector = document.getElementById('plSector').value;
   const indSel = document.getElementById('plIndustry');
   const typeSel = document.getElementById('plJobType');
   const roleSel = document.getElementById('plJobRole');
-  [indSel, typeSel, roleSel].forEach(s => { s.innerHTML = '<option value="">Select</option>'; s.disabled = true; });
+  [indSel, typeSel, roleSel].forEach(select => resetSelect(select));
   if (sector && CONFIG.SECTOR_DATA[sector]) {
     Object.keys(CONFIG.SECTOR_DATA[sector]).sort().forEach(ind => {
       const opt = document.createElement('option');
@@ -1012,34 +1105,27 @@ function populatePlacementIndustries() {
   }
 }
 function populatePlacementJobTypes() {
+  const sector = document.getElementById('plSector').value;
   const industry = document.getElementById('plIndustry').value;
   const typeSel = document.getElementById('plJobType');
-  document.getElementById('plJobRole').innerHTML = '<option value="">Select</option>';
-  document.getElementById('plJobRole').disabled = true;
-  if (industry) populateJobTypeOptions(typeSel);
+  resetSelect(document.getElementById('plJobRole'));
+  if (industry) populateJobTypeOptions(typeSel, sector, industry);
 }
 function populatePlacementJobRoles() {
   const sector = document.getElementById('plSector').value;
   const industry = document.getElementById('plIndustry').value;
   const jobType = document.getElementById('plJobType').value;
-  const roleSel = document.getElementById('plJobRole');
-  roleSel.innerHTML = '<option value="">Select</option>';
-  if (sector && industry && jobType && CONFIG.SECTOR_DATA[sector]?.[industry]) {
-    CONFIG.SECTOR_DATA[sector][industry]
-      .filter(role => classifyJobRole(role) === jobType)
-      .forEach(role => {
-        const opt = document.createElement('option');
-        opt.value = role; opt.textContent = role;
-        roleSel.appendChild(opt);
-      });
-    roleSel.disabled = false;
-  }
+  populateRoleOptions(document.getElementById('plJobRole'), sector, industry, jobType);
 }
 function classifyJobRole(role) {
-  const text = role.toLowerCase();
-  if (/\b(manager|director|principal|dean|registrar|administrator|superintendent|cto|lead|head)\b/.test(text)) return 'Management';
-  if (/\b(accountant|bookkeeper|officer|coordinator|specialist|analyst|secretary|clerk|cashier|teller|buyer|recruiter|writer|controller|auditor|agent|rep|representative|relationship|records|admissions|documentation|dispatcher)\b/.test(text)) return 'Administrative';
-  if (/\b(cleaner|security|guard|driver|loader|laborer|worker|operator|attendant|hand|janitor|gardener|courier|picker|stocker|sanitation|bellhop|housekeeper|room|laundry|shelf|storekeeper|warehouse|front desk|cashier|helper|assistant)\b/.test(text)) return 'Support';
+  const title = String(role || '').trim();
+  if (JOB_ROLE_EXACT_CATEGORY[title]) return JOB_ROLE_EXACT_CATEGORY[title];
+  const text = title.toLowerCase().replace(/[^a-z0-9\s&/+-]/g, ' ');
+  if (/\b(manager|director|supervisor|principal|dean|registrar|administrator|superintendent|cto|lead|head|owner|chief)\b/.test(text)) return 'Management';
+  if (/\b(engineer|scientist|developer|designer|programmer|analyst|doctor|nurse|pharmacist|teacher|lecturer|architect|consultant|specialist|technician|biologist|surgeon|agronomist|geologist|data scientist|ai|ml|cybersecurity|product manager|research|lab)\b/.test(text)) return 'Technical';
+  if (/\b(accountant|bookkeeper|clerk|secretary|cashier|teller|buyer|recruiter|records|admissions|dispatcher|procurement|compliance|hr|customer service|sales|agent|representative|inventory|documentation|officer|assistant|coordinator|admin)\b/.test(text)) return 'Administrative';
+  if (/\b(electrician|plumber|carpenter|mason|bricklayer|welder|mechanic|painter|tailor|barber|cook|chef|baker|driver|hauler|deckhand|roughneck|roustabout|installer|repairer|machinist|artisan|fitter|forester|ranger|operator)\b/.test(text)) return 'Skilled Trades';
+  if (/\b(cleaner|security|guard|porter|helper|attendant|laborer|courier|janitor|gardener|warehouse|picker|stocker|loader|bellhop|housekeeper|sanitation|shelf|storekeeper|assistant|hand|worker)\b/.test(text)) return 'Support Services';
   return 'Technical';
 }
 
@@ -1072,6 +1158,7 @@ function toggleBaselineEmploymentFields() {
       const el = document.getElementById(id);
       if (el) el.disabled = true;
     });
+    resetOtherJobRole('jobRole');
   }
 }
 function toggleCapacityFields(show) {
@@ -1112,6 +1199,7 @@ function setSectionControlsDisabled(sectionId, disabled) {
     control.disabled = disabled;
     if (disabled && control.type !== 'radio' && control.type !== 'checkbox') control.value = '';
   });
+  ['jobRole','plJobRole','batchJobRole'].forEach(id => toggleOtherJobRole(id, `${id}Other`));
 }
 function getFieldLabel(field) {
   const group = field.closest('.field-group');
@@ -1437,7 +1525,7 @@ function collectFormData() {
     sector: document.getElementById('sector').value,
     industry: document.getElementById('industry').value,
     jobType: document.getElementById('jobType').value,
-    jobRole: document.getElementById('jobRole').value,
+    jobRole: getResolvedJobRole('jobRole', 'jobRoleOther'),
     workRegion: document.getElementById('workRegion').value,
     workDistrict: document.getElementById('workDistrict').value,
     workCommunity: document.getElementById('workCommunity').value,
@@ -1464,7 +1552,7 @@ function collectFormData() {
     plSector: document.getElementById('plSector').value,
     plIndustry: document.getElementById('plIndustry').value,
     plJobType: document.getElementById('plJobType').value,
-    plJobRole: document.getElementById('plJobRole').value,
+    plJobRole: getResolvedJobRole('plJobRole', 'plJobRoleOther'),
     employmentType: document.getElementById('employmentType').value,
     employmentCategory: document.getElementById('employmentCategory').value,
     placementIncome: document.getElementById('placementIncome').value,
@@ -1521,11 +1609,13 @@ function resetForm() {
     if (el) el.classList.remove('show');
   });
   ['nationalityField','disabilitySpecField','virtualTrainingFields','trainingLocationGroup','previousTrainingDetails',
-   'currentEmploymentDetails','displacementReasonField','originalCommunityField','hostCommunityField'].forEach(id => {
+   'currentEmploymentDetails','displacementReasonField','originalCommunityField','hostCommunityField',
+   'jobRoleOtherGroup','plJobRoleOtherGroup','batchJobRoleOtherGroup'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
   });
-  ['district','industry','jobType','jobRole','placementDistrict','workDistrict','plIndustry','plJobType','plJobRole'].forEach(id => {
+  ['district','industry','jobType','jobRole','placementDistrict','workDistrict','plIndustry','plJobType','plJobRole',
+   'jobRoleOther','plJobRoleOther','batchJobRoleOther'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = true;
   });
@@ -1653,9 +1743,9 @@ function applyFilters(data, f) {
     if (f.region     && r.region !== f.region)                                   return false;
     if (f.sex        && r.sex !== f.sex)                                         return false;
     if (f.collector  && r.collectorName !== f.collector)                         return false;
-    if (f.status === 'registered'  && r.participantInfoStatus !== 'submitted')   return false;
-    if (f.status === 'capacity'    && r.capacityBuildingStatus !== 'submitted')  return false;
-    if (f.status === 'placement'   && r.jobPlacementStatus !== 'submitted')      return false;
+    if (f.status === 'registered'  && !isCompleteStatus(r.participantInfoStatus))   return false;
+    if (f.status === 'capacity'    && !isCompleteStatus(r.capacityBuildingStatus))  return false;
+    if (f.status === 'placement'   && !isCompleteStatus(r.jobPlacementStatus))      return false;
     return true;
   });
 }
@@ -1742,13 +1832,13 @@ function renderDashboard(data) {
   const pwd        = data.filter(r => r.disabilityStatus === 'Yes').length;
   const refugee    = data.filter(r => r.refugeeStatus === 'Yes').length;
   const displaced  = data.filter(r => r.displacementStatus === 'Yes').length;
-  const registered = data.filter(r => r.participantInfoStatus === 'submitted').length;
-  const trained    = data.filter(r => r.capacityBuildingStatus === 'submitted').length;
-  const placed     = data.filter(r => r.jobPlacementStatus === 'submitted').length;
+  const registered = data.filter(r => isCompleteStatus(r.participantInfoStatus)).length;
+  const trained    = data.filter(r => isCompleteStatus(r.capacityBuildingStatus)).length;
+  const placed     = data.filter(r => isCompleteStatus(r.jobPlacementStatus)).length;
   const cvUploaded = data.filter(r => r.cvStatus === 'cv_uploaded').length;
   const noCv       = data.filter(r => r.cvStatus === 'no_cv').length;
-  const trainedData = data.filter(r => r.capacityBuildingStatus === 'submitted');
-  const placedData  = data.filter(r => r.jobPlacementStatus === 'submitted');
+  const trainedData = data.filter(r => isCompleteStatus(r.capacityBuildingStatus));
+  const placedData  = data.filter(r => isCompleteStatus(r.jobPlacementStatus));
 
   document.getElementById('dashboardContent').innerHTML =
     dashSection1_Snapshot(total, registered, trained, placed, female, male, youth, pwd, refugee, displaced, cvUploaded, noCv) +
@@ -1851,7 +1941,7 @@ function dashSection2_Trend(data) {
   };
 
   const consentedPer  = periods.map(p => data.filter(r => inPeriod(getConsentDate(r), p)).length);
-  const registeredPer = periods.map(p => data.filter(r => r.participantInfoStatus === 'submitted' && inPeriod(getRegDate(r), p)).length);
+  const registeredPer = periods.map(p => data.filter(r => isCompleteStatus(r.participantInfoStatus) && inPeriod(getRegDate(r), p)).length);
   const maxVal = Math.max(...consentedPer, ...registeredPer, 1);
 
   const fmt = p => { const d = new Date(p + 'T00:00:00'); return d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }); };
@@ -1955,9 +2045,9 @@ function dashSection3_Partners(data) {
     const g    = data.filter(r => r.implementingPartner === p);
     const f    = g.filter(r => r.sex === 'Female').length;
     const yo   = g.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
-    const reg  = g.filter(r => r.participantInfoStatus === 'submitted').length;
-    const tr   = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl   = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    const reg  = g.filter(r => isCompleteStatus(r.participantInfoStatus)).length;
+    const tr   = g.filter(r => isCompleteStatus(r.capacityBuildingStatus)).length;
+    const pl   = g.filter(r => isCompleteStatus(r.jobPlacementStatus)).length;
     return `<tr style="border-bottom:1px solid #f1f5f9;">
       <td style="padding:0.3rem 0.5rem;font-weight:700;font-size:0.73rem;color:#1e293b;white-space:nowrap;">${escapeHtml(p)}</td>
       ${numCell(g.length)}
@@ -1972,9 +2062,9 @@ function dashSection3_Partners(data) {
   const total = data.length;
   const tf    = data.filter(r => r.sex === 'Female').length;
   const tyo   = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= 15 && a <= 35; }).length;
-  const treg  = data.filter(r => r.participantInfoStatus === 'submitted').length;
-  const ttr   = data.filter(r => r.capacityBuildingStatus === 'submitted').length;
-  const tpl   = data.filter(r => r.jobPlacementStatus === 'submitted').length;
+  const treg  = data.filter(r => isCompleteStatus(r.participantInfoStatus)).length;
+  const ttr   = data.filter(r => isCompleteStatus(r.capacityBuildingStatus)).length;
+  const tpl   = data.filter(r => isCompleteStatus(r.jobPlacementStatus)).length;
   const totalsRow = `<tr style="background:#f8fafc;font-weight:800;border-top:2px solid #e2e8f0;">
     <td style="padding:0.35rem 0.5rem;font-size:0.73rem;color:#374151;">TOTAL</td>
     ${numCell(total)}
@@ -2015,18 +2105,18 @@ function dashSection6_Quality(data) {
 
   const mismatchPx = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH'));
   const stuckPx    = data.filter(r => {
-    if (r.participantInfoStatus === 'submitted') return false;
+    if (isCompleteStatus(r.participantInfoStatus)) return false;
     const d = r.consentSubmittedAt ? new Date(r.consentSubmittedAt) : null;
     return d && (now - d.getTime()) / 86400000 > 7;
   });
   const badAgePx   = data.filter(r =>
-    r.participantInfoStatus === 'submitted' && r.age !== '' && r.age !== undefined && Number(r.age) < 10
+    isCompleteStatus(r.participantInfoStatus) && r.age !== '' && r.age !== undefined && Number(r.age) < 10
   );
   const noNamePx   = data.filter(r =>
-    r.participantInfoStatus === 'submitted' && !r.surname && !r.firstName
+    isCompleteStatus(r.participantInfoStatus) && !r.surname && !r.firstName
   );
   const noPartnerPx = data.filter(r =>
-    r.participantInfoStatus === 'submitted' && !r.implementingPartner
+    isCompleteStatus(r.participantInfoStatus) && !r.implementingPartner
   );
 
   if (!mismatchPx.length && !stuckPx.length && !badAgePx.length && !noNamePx.length && !noPartnerPx.length) return `
@@ -2361,9 +2451,9 @@ function buildReportTables(data) {
     return;
   }
 
-  const registered  = data.filter(r => r.participantInfoStatus === 'submitted');
-  const trained     = data.filter(r => r.capacityBuildingStatus === 'submitted');
-  const placed      = data.filter(r => r.jobPlacementStatus === 'submitted');
+  const registered  = data.filter(r => isCompleteStatus(r.participantInfoStatus));
+  const trained     = data.filter(r => isCompleteStatus(r.capacityBuildingStatus));
+  const placed      = data.filter(r => isCompleteStatus(r.jobPlacementStatus));
   const cvUploaded  = data.filter(r => r.cvStatus === 'cv_uploaded').length;
   const noCv        = data.filter(r => r.cvStatus === 'no_cv').length;
 
@@ -2391,10 +2481,10 @@ function buildReportTables(data) {
   const allPartners = [...new Set(data.map(r => r.implementingPartner || '(None)'))].sort();
   const partnerRows = allPartners.map(p => {
     const g = data.filter(r => (r.implementingPartner || '(None)') === p);
-    const tr_n = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl_n = g.filter(r => r.jobPlacementStatus === 'submitted').length;
-    const tr_f = g.filter(r => r.capacityBuildingStatus === 'submitted' && r.sex === 'Female').length;
-    const pl_f = g.filter(r => r.jobPlacementStatus === 'submitted' && r.sex === 'Female').length;
+    const tr_n = g.filter(r => isCompleteStatus(r.capacityBuildingStatus)).length;
+    const pl_n = g.filter(r => isCompleteStatus(r.jobPlacementStatus)).length;
+    const tr_f = g.filter(r => isCompleteStatus(r.capacityBuildingStatus) && r.sex === 'Female').length;
+    const pl_f = g.filter(r => isCompleteStatus(r.jobPlacementStatus) && r.sex === 'Female').length;
     return [p, g.length, tf(g), pct(tf(g),g.length), ty(g), pct(ty(g),g.length),
             tp(g), tr_ref(g), tr_dis(g),
             tr_n, pct(tr_n,g.length), tr_f, pct(tr_f,tr_n||1),
@@ -2415,8 +2505,8 @@ function buildReportTables(data) {
   const allRegions = [...new Set(data.map(r => r.region).filter(Boolean))].sort();
   const regionRows = allRegions.map(reg => {
     const g   = data.filter(r => r.region === reg);
-    const tr_n = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl_n = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    const tr_n = g.filter(r => isCompleteStatus(r.capacityBuildingStatus)).length;
+    const pl_n = g.filter(r => isCompleteStatus(r.jobPlacementStatus)).length;
     return [reg, g.length, tf(g), pct(tf(g),g.length), ty(g), pct(ty(g),g.length),
             tp(g), tr_ref(g), tr_n, pct(tr_n,g.length), pl_n, pct(pl_n,g.length)];
   });
@@ -2432,8 +2522,8 @@ function buildReportTables(data) {
   const AGE_GROUPS = [[15,19,'15–19'],[20,24,'20–24'],[25,29,'25–29'],[30,35,'30–35'],[36,50,'36–50'],[51,120,'51+']];
   const ageRows = AGE_GROUPS.map(([min,max,label]) => {
     const g   = data.filter(r => { const a = Number(r.age); return !isNaN(a) && a >= min && a <= max; });
-    const tr_n = g.filter(r => r.capacityBuildingStatus === 'submitted').length;
-    const pl_n = g.filter(r => r.jobPlacementStatus === 'submitted').length;
+    const tr_n = g.filter(r => isCompleteStatus(r.capacityBuildingStatus)).length;
+    const pl_n = g.filter(r => isCompleteStatus(r.jobPlacementStatus)).length;
     return [label, g.length, pct(g.length,total), tf(g), pct(tf(g),g.length||1),
             tr_n, pct(tr_n,g.length||1), pl_n, pct(pl_n,g.length||1)];
   });
@@ -2849,13 +2939,13 @@ function renderCorrectionQuality(data) {
 
   const mismatchPx  = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH'));
   const stuckPx     = data.filter(r => {
-    if (r.participantInfoStatus === 'submitted') return false;
+    if (isCompleteStatus(r.participantInfoStatus)) return false;
     const d = r.consentSubmittedAt ? new Date(r.consentSubmittedAt) : null;
     return d && (now - d.getTime()) / 86400000 > 7;
   });
-  const badAgePx    = data.filter(r => r.participantInfoStatus === 'submitted' && r.age !== '' && r.age !== undefined && Number(r.age) < 10);
-  const noNamePx    = data.filter(r => r.participantInfoStatus === 'submitted' && !r.surname && !r.firstName);
-  const noPartnerPx = data.filter(r => r.participantInfoStatus === 'submitted' && !r.implementingPartner);
+  const badAgePx    = data.filter(r => isCompleteStatus(r.participantInfoStatus) && r.age !== '' && r.age !== undefined && Number(r.age) < 10);
+  const noNamePx    = data.filter(r => isCompleteStatus(r.participantInfoStatus) && !r.surname && !r.firstName);
+  const noPartnerPx = data.filter(r => isCompleteStatus(r.participantInfoStatus) && !r.implementingPartner);
 
   const total = mismatchPx.length + stuckPx.length + badAgePx.length + noNamePx.length + noPartnerPx.length;
 
@@ -3074,7 +3164,7 @@ function batchPopulateIndustries() {
   const indSel = document.getElementById('batchIndustry');
   const typSel = document.getElementById('batchJobType');
   const rolSel = document.getElementById('batchJobRole');
-  [indSel, typSel, rolSel].forEach(s => { s.innerHTML = '<option value="">Select</option>'; s.disabled = true; });
+  [indSel, typSel, rolSel].forEach(select => resetSelect(select));
   if (sector && CONFIG.SECTOR_DATA[sector]) {
     Object.keys(CONFIG.SECTOR_DATA[sector]).sort().forEach(ind => {
       const opt = document.createElement('option');
@@ -3086,30 +3176,18 @@ function batchPopulateIndustries() {
 }
 
 function batchPopulateJobTypes() {
+  const sector   = document.getElementById('batchSector').value;
   const industry = document.getElementById('batchIndustry').value;
   const typSel   = document.getElementById('batchJobType');
-  document.getElementById('batchJobRole').innerHTML = '<option value="">Select</option>';
-  document.getElementById('batchJobRole').disabled  = true;
-  if (industry) populateJobTypeOptions(typSel);
+  resetSelect(document.getElementById('batchJobRole'));
+  if (industry) populateJobTypeOptions(typSel, sector, industry);
 }
 
 function batchPopulateJobRoles() {
   const sector   = document.getElementById('batchSector').value;
   const industry = document.getElementById('batchIndustry').value;
   const jobType  = document.getElementById('batchJobType').value;
-  const rolSel   = document.getElementById('batchJobRole');
-  rolSel.innerHTML = '<option value="">Select</option>';
-  rolSel.disabled  = true;
-  if (sector && industry && jobType && CONFIG.SECTOR_DATA[sector]?.[industry]) {
-    CONFIG.SECTOR_DATA[sector][industry]
-      .filter(role => classifyJobRole(role) === jobType)
-      .forEach(role => {
-        const opt = document.createElement('option');
-        opt.value = role; opt.textContent = role;
-        rolSel.appendChild(opt);
-      });
-    rolSel.disabled = false;
-  }
+  populateRoleOptions(document.getElementById('batchJobRole'), sector, industry, jobType);
 }
 
 function collectBatchDetails() {
@@ -3123,7 +3201,7 @@ function collectBatchDetails() {
     plSector:            document.getElementById('batchSector').value,
     plIndustry:          document.getElementById('batchIndustry').value,
     plJobType:           document.getElementById('batchJobType').value,
-    plJobRole:           document.getElementById('batchJobRole').value,
+    plJobRole:           getResolvedJobRole('batchJobRole', 'batchJobRoleOther'),
     employmentType:      document.getElementById('batchEmploymentType').value,
     employmentCategory:  document.getElementById('batchEmploymentCategory').value,
     contractType:        document.getElementById('batchContractType').value,
@@ -3234,7 +3312,7 @@ function renderBatchParticipantList() {
   }
 
   list.innerHTML = visible.map(p => {
-    const trained = p.capacityStatus === 'submitted';
+    const trained = isCompleteStatus(p.capacityStatus);
     return `
     <label style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 0.75rem;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background 0.1s;"
            onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">

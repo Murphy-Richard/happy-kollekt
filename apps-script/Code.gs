@@ -10,6 +10,8 @@ const PARTICIPANT_INFO_SHEET_NAME    = 'Participant Information';
 const CAPACITY_BUILDING_SHEET_NAME   = 'Capacity Building / Training';
 const JOB_PLACEMENT_SHEET_NAME       = 'Job Placement';
 const PLACEMENT_BATCHES_SHEET_NAME   = 'Placement Batches';
+const DATA_QUALITY_SHEET_NAME        = 'Data_Quality_Issues';
+const SYSTEM_CONFIG_SHEET_NAME       = 'System_Config';
 const CONSENT_TAB_NAME               = 'Consents';
 
 // ─── OTHER CONSTANTS ─────────────────────────────────────────────────────────
@@ -33,7 +35,7 @@ const MASTER_HEADERS = [
   'consentEmailSent', 'consentEmailSentAt', 'consentEmailSendError',
   'consentVenue', 'consentSignatureFileUrl', 'consentSignatureFileId', 'consentSignatureFileName',
   'participantInfoStatus', 'capacityBuildingStatus', 'jobPlacementStatus',
-  'currentStage', 'lockedSections', 'cvStatus',
+  'currentStage', 'overallStatus', 'lockedSections', 'cvStatus',
   'cvUploadedAt', 'cvFileUrl', 'cvFileId', 'cvDecisionAt', 'cvTemplateFolderAccessed',
   'lastUpdatedAt', 'lastUpdatedBy', 'createdAt', 'createdBy',
   'submissionId', 'localQueueId', 'syncStatus', 'collectorName', 'deviceId', 'submissionTimestamp',
@@ -67,6 +69,15 @@ const PLACEMENT_BATCHES_HEADERS = [
   'PLACEMENT REGION', 'PLACEMENT DISTRICT', 'PLACEMENT COMMUNITY',
   'PLACED BY PARTNER', 'PARTICIPANT COUNT', 'CREATED AT', 'CREATED BY'
 ];
+
+const DATA_QUALITY_HEADERS = [
+  'issueId', 'participantId', 'relatedParticipantId', 'issueType', 'severity',
+  'status', 'fieldName', 'currentValue', 'expectedValue', 'confidence',
+  'detectedAt', 'detectedBy', 'assignedRole', 'resolution', 'resolvedBy',
+  'resolvedAt', 'notes', 'fingerprint'
+];
+
+const SYSTEM_CONFIG_HEADERS = ['key', 'value', 'updatedAt', 'updatedBy'];
 
 const AUDIT_HEADERS = [
   'auditId', 'timestamp', 'participantId', 'actorType', 'actor',
@@ -144,12 +155,21 @@ function doPost(e) {
     if (action === 'getEligibleForPlacement')     return jsonResponse(getEligibleForPlacement(payload.adminPassword));
     if (action === 'submitPlacementBatch')        return jsonResponse(submitPlacementBatch(payload));
     if (action === 'bulkSetPartner')              return jsonResponse(bulkSetPartner(payload));
+    if (action === 'runDataQualityScan')          return jsonResponse(runDataQualityScan(payload));
+    if (action === 'resolveDataQualityIssue')     return jsonResponse(resolveDataQualityIssue(payload));
+    if (action === 'validateTransition')          return jsonResponse(validateTransitionAction(payload));
+    if (action === 'installDataQualityScanTrigger') return jsonResponse(installDataQualityScanTrigger(payload));
     if (action === 'normalizeExistingRecords')     return jsonResponse(normalizeExistingRecords(payload.adminPassword));
     if (action === 'previewBulkImportedRecords')  return jsonResponse(previewBulkImportedRecords(payload.adminPassword));
     if (action === 'removeBulkImportedRecords')   return jsonResponse(removeBulkImportedRecords(payload.adminPassword));
+    if (action === 'previewOrphanedSubsheetRows') return jsonResponse(cleanupOrphanedSubsheetRows({ adminPassword: payload.adminPassword, dryRun: true }));
+    if (action === 'cleanupOrphanedSubsheetRows') return jsonResponse(cleanupOrphanedSubsheetRows(payload));
 
     throw new Error('Unsupported action: ' + action);
   } catch (err) {
+    if (String(err.message || '').startsWith('CONFLICT:')) {
+      return jsonResponse({ status: 'CONFLICT', message: err.message });
+    }
     return jsonResponse({ status: 'ERROR', message: err.message });
   }
 }
@@ -164,6 +184,7 @@ function doGet(e) {
     else if (p.action === 'getParticipantById') result = getParticipantById(p.participantId);
     else if (p.action === 'getReportStats')   result = getReportStats();
     else if (p.action === 'getSheetData')     result = getProtectedSheetData(p.adminPassword, p.sheetName);
+    else if (p.action === 'runDataQualityScan') result = runDataQualityScan(p);
     else result = { status: 'OK', version: BACKEND_VERSION };
 
     return cb ? jsonpResponse(cb, result) : jsonResponse(result);
@@ -359,6 +380,9 @@ function saveParticipantInfo(payload, explicitSection) {
   const capacityStatus  = resolveCapacityStatus(existing, incoming, explicitSection, accessMode);
   const placementStatus = resolvePlacementStatus(existing, incoming, explicitSection, accessMode);
   const lockedSections  = buildLockedSections(capacityStatus, placementStatus);
+  const participantInfoStatus = (accessMode === 'capacity-existing' || explicitSection === 'capacity' || explicitSection === 'placement')
+    ? normalizeLifecycleStatus(existing.participantInfoStatus || 'not_started')
+    : 'complete';
 
   const record = Object.assign(blankRecord(headers), existing, incoming, {
     participantId,
@@ -366,13 +390,11 @@ function saveParticipantInfo(payload, explicitSection) {
     // Never allow a payload to overwrite an already-assigned HAMIS ID
     hamisId:                   existing.hamisId || incoming.hamisId || '',
     // Only mark registered if this submission actually includes participant info.
-    // Capacity-only and placement-only submissions should not flip a consent-only record to 'submitted'.
-    participantInfoStatus: (accessMode === 'capacity-existing' || explicitSection === 'capacity' || explicitSection === 'placement')
-      ? (existing.participantInfoStatus || 'not_started')
-      : 'submitted',
+    // Capacity-only and placement-only submissions should not flip a consent-only record to complete.
+    participantInfoStatus,
     capacityBuildingStatus:    capacityStatus,
     jobPlacementStatus:        placementStatus,
-    currentStage:              resolveStage(capacityStatus, placementStatus, incoming.employerName || existing.employerName),
+    overallStatus:             existing.overallStatus || 'active',
     lockedSections,
     lastUpdatedAt:             now,
     lastUpdatedBy:             payload.collectorName || payload.actor || 'participant',
@@ -388,6 +410,10 @@ function saveParticipantInfo(payload, explicitSection) {
 
   // Apply display normalisations: local phone format + Title Case names
   normaliseRecordFields(record);
+  record.currentStage = resolveStage(record);
+
+  runDataQualityChecks(record, master, headers);
+  validateTransitionGuards(record, existing, explicitSection, accessMode);
 
   if (isNew) {
     master.appendRow(headers.map(h => toSheetValue(record[h] || '')));
@@ -625,6 +651,9 @@ function adminUpdateParticipant(payload) {
   const row     = findParticipantRow(master, headers, { participantId: payload.participantId });
   if (row < 1) throw new Error('Participant not found.');
   const updates = pickKnownFields(payload.updates || {}, headers);
+  delete updates.currentStage;
+  delete updates.lockedSections;
+  Object.keys(updates).forEach(fieldName => markDownstreamNeedsReview(updates, fieldName));
   updates.lastUpdatedAt = new Date().toISOString();
   updates.lastUpdatedBy = payload.actor || 'admin';
   updateRow(master, headers, row, updates);
@@ -667,9 +696,9 @@ function getReportStats() {
     stats: {
       total:                   records.length,
       consentComplete:         countWhere(records, 'consentStatus', 'complete'),
-      registrationSubmitted:   countWhere(records, 'participantInfoStatus', 'submitted'),
-      capacitySubmitted:       countWhere(records, 'capacityBuildingStatus', 'submitted'),
-      placementSubmitted:      countWhere(records, 'jobPlacementStatus', 'submitted'),
+      registrationSubmitted:   countComplete(records, 'participantInfoStatus'),
+      capacitySubmitted:       countComplete(records, 'capacityBuildingStatus'),
+      placementSubmitted:      countComplete(records, 'jobPlacementStatus'),
       noCv:                    countWhere(records, 'cvStatus', 'no_cv'),
       cvUploaded:              countWhere(records, 'cvStatus', 'cv_uploaded')
     }
@@ -793,10 +822,11 @@ function importFromSheet(payload) {
       Object.assign(record, incoming, {
         participantId,
         consentStatus:               'complete',
-        participantInfoStatus:       'submitted',
+        participantInfoStatus:       'complete',
         capacityBuildingStatus:      'not_started',
-        jobPlacementStatus:          hasPlacement ? 'submitted'         : 'not_started',
-        currentStage:                hasPlacement ? 'placement_complete' : 'registration_complete',
+        jobPlacementStatus:          hasPlacement ? 'complete'          : 'not_started',
+        currentStage:                hasPlacement ? 'outcome_tracking'  : 'cv_upload',
+        overallStatus:               'active',
         lockedSections:              hasPlacement ? 'jobPlacement'      : '',
         cvStatus:                    'not_started',
         syncStatus:                  'migrated',
@@ -936,6 +966,475 @@ function getRecords(sheet, headers) {
     .filter(row => Object.values(row).some(Boolean));
 }
 
+function getDataQualitySheet() {
+  return getOrCreateSheet(DATA_QUALITY_SHEET_NAME, DATA_QUALITY_HEADERS);
+}
+
+function getSystemConfigSheet() {
+  return getOrCreateSheet(SYSTEM_CONFIG_SHEET_NAME, SYSTEM_CONFIG_HEADERS);
+}
+
+function getSystemConfigValue(key, fallback) {
+  const sheet = getSystemConfigSheet();
+  const headers = ensureHeaders(sheet, SYSTEM_CONFIG_HEADERS);
+  const records = getRecords(sheet, headers);
+  const found = records.find(r => r.key === key);
+  return found ? found.value : fallback;
+}
+
+function setSystemConfigValue(key, value, actor) {
+  const sheet = getSystemConfigSheet();
+  const headers = ensureHeaders(sheet, SYSTEM_CONFIG_HEADERS);
+  const records = getRecords(sheet, headers);
+  const now = new Date().toISOString();
+  const existingIndex = records.findIndex(r => r.key === key);
+  const record = { key, value: String(value), updatedAt: now, updatedBy: actor || 'apps-script' };
+  if (existingIndex >= 0) {
+    updateRow(sheet, headers, existingIndex + 2, record);
+  } else {
+    sheet.appendRow(headers.map(h => toSheetValue(record[h] || '')));
+  }
+}
+
+function createDataQualityIssue(issue) {
+  const sheet = getDataQualitySheet();
+  const headers = ensureHeaders(sheet, DATA_QUALITY_HEADERS);
+  const fingerprint = issue.fingerprint || hashValue([
+    issue.participantId || '',
+    issue.issueType || '',
+    issue.fieldName || '',
+    issue.relatedParticipantId || ''
+  ].join('|'));
+
+  if (sheet.getLastRow() >= 2) {
+    const rows = getRecords(sheet, headers);
+    const existing = rows.find(r =>
+      r.fingerprint === fingerprint &&
+      (r.status === 'open' || r.status === 'in_review')
+    );
+    if (existing) return existing.issueId;
+  }
+
+  const record = {};
+  DATA_QUALITY_HEADERS.forEach(h => record[h] = '');
+  Object.assign(record, {
+    issueId: issue.issueId || Utilities.getUuid(),
+    participantId: issue.participantId || '',
+    relatedParticipantId: issue.relatedParticipantId || '',
+    issueType: issue.issueType || '',
+    severity: issue.severity || 'medium',
+    status: issue.status || 'open',
+    fieldName: issue.fieldName || '',
+    currentValue: issue.currentValue || '',
+    expectedValue: issue.expectedValue || '',
+    confidence: issue.confidence || '',
+    detectedAt: issue.detectedAt || new Date().toISOString(),
+    detectedBy: issue.detectedBy || 'apps-script',
+    assignedRole: issue.assignedRole || '',
+    notes: issue.notes || '',
+    fingerprint
+  });
+  sheet.appendRow(headers.map(h => toSheetValue(record[h] || '')));
+  appendAudit({
+    participantId: record.participantId,
+    actorType: 'system',
+    actor: 'apps-script',
+    action: 'createDataQualityIssue',
+    section: 'data_quality',
+    notes: record.issueType + ' | ' + record.severity + (record.relatedParticipantId ? ' | related: ' + record.relatedParticipantId : '')
+  });
+  return record.issueId;
+}
+
+function runDataQualityChecks(record, master, headers) {
+  detectDuplicateIssues(record, master, headers).forEach(createDataQualityIssue);
+  detectMissingRequiredIssues(record).forEach(createDataQualityIssue);
+}
+
+function detectMissingRequiredIssues(record) {
+  const issues = [];
+  const participantId = record.participantId || '';
+  if (!participantId) return issues;
+  [
+    ['surname', record.surname, 'Participant surname is required.'],
+    ['firstName', record.firstName, 'Participant first name is required.'],
+    ['sex', record.sex, 'Participant sex is required.'],
+    ['telephone', record.telephone || record.consentPhone, 'Participant telephone is required.'],
+    ['region', record.region, 'Participant region is required.'],
+    ['district', record.district, 'Participant district is required.'],
+    ['educationLevel', record.educationLevel, 'Education level is required.'],
+    ['employmentStatus', record.employmentStatus, 'Employment status is required.']
+  ].forEach(item => {
+    if (!item[1] && isCompleteStatus(record.participantInfoStatus)) {
+      issues.push(buildDqIssue(participantId, '', 'missing_required_field', 'medium', item[0], '', 'required', 'Youth Engagement', item[2]));
+    }
+  });
+  if (isCompleteStatus(record.jobPlacementStatus)) {
+    [
+      ['placementStartDate', record.placementStartDate, 'Placement start date is required.'],
+      ['plJobRole', record.plJobRole, 'Placement job role is required.'],
+      ['employmentType', record.employmentType, 'Employment type is required.']
+    ].forEach(item => {
+      if (!item[1]) issues.push(buildDqIssue(participantId, '', 'missing_required_field', 'critical', item[0], '', 'required', 'Youth Engagement', item[2]));
+    });
+    if (!(record.employerName || record.placedByPartner)) {
+      issues.push(buildDqIssue(participantId, '', 'missing_required_field', 'critical', 'employerName', '', 'employerName or placedByPartner', 'Youth Engagement', 'Employer name or placed-by partner is required.'));
+    }
+  }
+  return issues;
+}
+
+function detectDuplicateIssues(record, master, headers) {
+  const issues = [];
+  if (!record.participantId || master.getLastRow() < 2) return issues;
+  const records = getRecords(master, headers);
+  const currentName = normalizeNameTokens(getFullName(record));
+  const currentPhone = normalizePhone(record.telephone || record.consentPhone);
+  const currentEmail = normalizeEmail(record.consentEmail || record.email);
+  const currentCard = normalizeGhanaCard(record.ghanaCardId);
+  const currentNameKey = normalizeNameKey(getFullName(record));
+  const currentDob = String(record.dob || '').trim();
+  const currentDistrict = String(record.district || '').trim().toLowerCase();
+
+  records.forEach(other => {
+    if (!other.participantId || other.participantId === record.participantId) return;
+    if (isInactiveRecord(other)) return;
+
+    const relatedName = normalizeNameTokens(getFullName(other));
+    const relatedPhone = normalizePhone(other.telephone || other.consentPhone);
+    const relatedEmail = normalizeEmail(other.consentEmail || other.email);
+    const relatedCard = normalizeGhanaCard(other.ghanaCardId);
+    const relatedNameKey = normalizeNameKey(getFullName(other));
+    const relatedDob = String(other.dob || '').trim();
+    const relatedDistrict = String(other.district || '').trim().toLowerCase();
+
+    if (currentCard && relatedCard && currentCard === relatedCard) {
+      issues.push(buildDqIssue(record.participantId, other.participantId, 'duplicate_ghana_card', 'critical', 'ghanaCardId', record.ghanaCardId, other.ghanaCardId, 'IT Admin', 'Same normalized Ghana Card on active participants.'));
+    }
+    if (currentPhone && relatedPhone && currentPhone === relatedPhone) {
+      const overlap = hasNameTokenOverlap(currentName, relatedName);
+      issues.push(buildDqIssue(record.participantId, other.participantId, overlap ? 'duplicate_phone_name_overlap' : 'same_phone_different_name', overlap ? 'high' : 'medium', 'telephone', record.telephone || record.consentPhone, other.telephone || other.consentPhone, overlap ? 'Youth Engagement' : 'M&E', overlap ? 'Same normalized phone and overlapping name.' : 'Same normalized phone but different name.'));
+    }
+    if (currentEmail && relatedEmail && currentEmail === relatedEmail && hasNameTokenOverlap(currentName, relatedName)) {
+      issues.push(buildDqIssue(record.participantId, other.participantId, 'duplicate_email_name_overlap', 'high', 'consentEmail', record.consentEmail || record.email, other.consentEmail || other.email, 'Youth Engagement', 'Same normalized email and overlapping name.'));
+    }
+    if (currentNameKey && currentNameKey === relatedNameKey && currentDob && currentDob === relatedDob && currentDistrict && currentDistrict === relatedDistrict) {
+      issues.push(buildDqIssue(record.participantId, other.participantId, 'duplicate_name_dob_district', 'high', 'surname', getFullName(record), getFullName(other), 'Youth Engagement', 'Same normalized full name, DOB, and district.'));
+    }
+  });
+  return issues;
+}
+
+function buildDqIssue(participantId, relatedParticipantId, issueType, severity, fieldName, currentValue, expectedValue, assignedRole, notes) {
+  return {
+    participantId,
+    relatedParticipantId,
+    issueType,
+    severity,
+    fieldName,
+    currentValue,
+    expectedValue,
+    confidence: severity === 'critical' ? '1' : '0.85',
+    assignedRole,
+    notes
+  };
+}
+
+function validateTransitionGuards(record, existing, explicitSection, accessMode) {
+  const placementRequested = isCompleteStatus(record.jobPlacementStatus) &&
+    (!isCompleteStatus(existing.jobPlacementStatus) || explicitSection === 'placement' || accessMode === 'admin');
+  if (!placementRequested) return;
+  const from = normalizeStage(existing.currentStage || record.currentStage || 'participant_information');
+  const result = validateTransition(from, 'outcome_tracking', record, { actor: record.lastUpdatedBy || 'system' });
+  if (!result.ok) {
+    record.jobPlacementStatus = 'needs_review';
+    record.currentStage = normalizeStage(existing.currentStage || record.currentStage || 'participant_information');
+    throw new Error('CONFLICT: ' + result.errors.join(' '));
+  }
+}
+
+function validateTransition(from, to, record, actor) {
+  const source = normalizeStage(from);
+  const target = normalizeStage(to);
+  const errors = [];
+  const allowed = {
+    consent: ['participant_information', 'withdrawn'],
+    participant_information: ['capacity_building', 'cv_upload', 'job_placement', 'outcome_tracking', 'withdrawn'],
+    capacity_building: ['cv_upload', 'job_placement', 'outcome_tracking', 'withdrawn'],
+    cv_upload: ['cv_parsing', 'job_matching', 'job_placement', 'outcome_tracking', 'withdrawn'],
+    cv_parsing: ['cv_upload', 'job_matching', 'withdrawn'],
+    job_matching: ['job_placement', 'outcome_tracking', 'withdrawn'],
+    job_placement: ['outcome_tracking', 'withdrawn'],
+    outcome_tracking: ['completed', 'withdrawn'],
+    completed: ['archived'],
+    withdrawn: ['archived']
+  };
+  if (!allowed[source] || !allowed[source].includes(target)) {
+    errors.push('Invalid transition from ' + source + ' to ' + target + '.');
+  }
+  if (target === 'participant_information') {
+    if (!isCompleteStatus(record.consentStatus)) errors.push('Consent must be complete before participant information.');
+    if (!record.participantId) errors.push('participantId is required.');
+  }
+  if (target === 'capacity_building' || target === 'cv_upload' || target === 'job_matching') {
+    if (!isCompleteStatus(record.participantInfoStatus)) errors.push('Participant information must be complete.');
+  }
+  if (target === 'cv_upload') {
+    const capacityDone = isCompleteStatus(record.capacityBuildingStatus) || record.capacityBuildingStatus === 'not_applicable' || source === 'participant_information';
+    if (!capacityDone) errors.push('Capacity building must be complete or not applicable.');
+  }
+  if (target === 'job_matching') {
+    if (!isCompleteStatus(record.participantInfoStatus)) errors.push('Participant information must be complete before job matching.');
+    if (record.cvStatus && !['parsed', 'reviewed', 'deferred', 'not_started', 'no_cv'].includes(record.cvStatus)) {
+      errors.push('CV must be parsed, reviewed, deferred, or not required before job matching.');
+    }
+    const blocking = getBlockingDataQualityIssues(record.participantId, 'job_matching');
+    if (blocking.length) errors.push('Blocking data quality issues prevent job matching.');
+  }
+  if (target === 'job_placement' || target === 'outcome_tracking') {
+    if (!isCompleteStatus(record.participantInfoStatus)) errors.push('Participant information must be complete before placement.');
+    if (!(record.employerName || record.placedByPartner)) errors.push('Employer name or placed-by partner is required before placement.');
+    if (!record.placementStartDate) errors.push('Placement start date is required before placement.');
+    if (!record.plJobRole) errors.push('Job role is required before placement.');
+    if (!record.employmentType) errors.push('Employment type is required before placement.');
+    const blocking = getBlockingDataQualityIssues(record.participantId, 'placement');
+    if (blocking.length) errors.push('Blocking data quality issues prevent placement.');
+  }
+  if (target === 'completed') {
+    if (!isCompleteStatus(record.jobPlacementStatus)) errors.push('Placement must be complete before completion.');
+  }
+  if (target === 'withdrawn' && actor && actor.actorType === 'staff' && !actor.reason) {
+    errors.push('Staff-initiated withdrawal requires a reason.');
+  }
+  return { ok: errors.length === 0, from: source, to: target, errors };
+}
+
+function validateTransitionAction(payload) {
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+  const master = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const row = findParticipantRow(master, headers, { participantId: payload.participantId });
+  if (row < 1) throw new Error('Participant not found.');
+  const record = rowToObject(headers, master.getRange(row, 1, 1, headers.length).getValues()[0]);
+  const result = validateTransition(payload.from || record.currentStage, payload.to, record, {
+    actorType: 'staff',
+    actor: payload.actor || 'admin',
+    reason: payload.reason || ''
+  });
+  return Object.assign({ status: 'OK', participantId: payload.participantId }, result);
+}
+
+function getBlockingDataQualityIssues(participantId, transition) {
+  const sheet = getDataQualitySheet();
+  const headers = ensureHeaders(sheet, DATA_QUALITY_HEADERS);
+  const issues = getRecords(sheet, headers);
+  return issues.filter(issue => {
+    if (issue.participantId !== participantId) return false;
+    if (issue.status !== 'open' && issue.status !== 'in_review') return false;
+    if (issue.severity === 'critical') return true;
+    if (transition === 'placement' && issue.severity === 'high') {
+      return ['duplicate_phone_name_overlap', 'duplicate_email_name_overlap', 'duplicate_name_dob_district'].includes(issue.issueType);
+    }
+    return false;
+  });
+}
+
+function isInactiveRecord(record) {
+  const stage = normalizeStage(record.currentStage || '');
+  return stage === 'withdrawn' || stage === 'archived' || String(record.overallStatus || '') === 'duplicate';
+}
+
+function getFullName(record) {
+  return [record.surname, record.firstName, record.otherNames, record.consentName].filter(Boolean).join(' ');
+}
+
+function normalizeNameTokens(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(token => token.length > 2);
+}
+
+function normalizeNameKey(name) {
+  return normalizeNameTokens(name).sort().join(' ');
+}
+
+function hasNameTokenOverlap(a, b) {
+  if (!a.length || !b.length) return false;
+  const bSet = new Set(b);
+  return a.some(token => bSet.has(token));
+}
+
+function runDataQualityScan(payload) {
+  payload = payload || {};
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+  return runDataQualityScanInternal(payload);
+}
+
+// Installable time trigger target. Runs without an HTTP admin password because
+// Apps Script invokes it inside the project context.
+function scheduledDataQualityScan() {
+  return runDataQualityScanInternal({ actor: 'scheduled_scan' });
+}
+
+function installDataQualityScanTrigger(payload) {
+  payload = payload || {};
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+  ScriptApp.getProjectTriggers()
+    .filter(trigger => trigger.getHandlerFunction() === 'scheduledDataQualityScan')
+    .forEach(trigger => ScriptApp.deleteTrigger(trigger));
+  ScriptApp.newTrigger('scheduledDataQualityScan')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  return { status: 'OK', message: 'Hourly data quality scan trigger installed.' };
+}
+
+function runInstallDataQualityScanTrigger() {
+  return installDataQualityScanTrigger({
+    adminPassword: PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD')
+  });
+}
+
+function runDataQualityScanInternal(payload) {
+  payload = payload || {};
+  const actor = payload.actor || 'scheduled_scan';
+  const batchSize = Math.max(1, Math.min(Number(payload.batchSize || getSystemConfigValue('dqScanBatchSize', 250)) || 250, 500));
+  const cursorKey = 'dqScanCursor';
+  const startRow = Math.max(2, Number(payload.startRow || getSystemConfigValue(cursorKey, 2)) || 2);
+  const master = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const lastRow = master.getLastRow();
+  if (lastRow < 2) {
+    setSystemConfigValue(cursorKey, 2, actor);
+    return { status: 'OK', processed: 0, nextCursor: 2, complete: true };
+  }
+
+  const endRow = Math.min(lastRow, startRow + batchSize - 1);
+  const rows = master.getRange(startRow, 1, endRow - startRow + 1, headers.length).getValues();
+  let processed = 0;
+  rows.forEach(row => {
+    const record = rowToObject(headers, row);
+    if (!record.participantId) return;
+    runDataQualityChecks(record, master, headers);
+    processed++;
+  });
+
+  const complete = endRow >= lastRow;
+  const nextCursor = complete ? 2 : endRow + 1;
+  setSystemConfigValue(cursorKey, nextCursor, actor);
+  setSystemConfigValue('dqScanLastRunAt', new Date().toISOString(), actor);
+  appendAudit({
+    actorType: 'system',
+    actor,
+    action: 'runDataQualityScan',
+    section: 'data_quality',
+    notes: 'Processed ' + processed + ' row(s); next cursor ' + nextCursor + (complete ? ' (complete)' : '')
+  });
+  return { status: 'OK', processed, startRow, endRow, nextCursor, complete };
+}
+
+function resolveDataQualityIssue(payload) {
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+  const action = payload.resolutionAction || payload.resolution || '';
+  if (!['fix_field', 'mark_not_duplicate', 'merge_duplicate', 'accept_exception'].includes(action)) {
+    throw new Error('Unsupported resolution action: ' + action);
+  }
+  const sheet = getDataQualitySheet();
+  const headers = ensureHeaders(sheet, DATA_QUALITY_HEADERS);
+  const issueRow = findDataQualityIssueRow(sheet, headers, payload.issueId);
+  if (issueRow < 1) throw new Error('Data quality issue not found.');
+  const issue = rowToObject(headers, sheet.getRange(issueRow, 1, 1, headers.length).getValues()[0]);
+  const actor = payload.actor || 'admin';
+  const now = new Date().toISOString();
+
+  if (action === 'fix_field') {
+    if (!issue.participantId || !payload.fieldName) throw new Error('fix_field requires participantId and fieldName.');
+    const master = getMasterSheet();
+    const masterHeaders = ensureHeaders(master, MASTER_HEADERS);
+    const row = findParticipantRow(master, masterHeaders, { participantId: issue.participantId });
+    if (row < 1) throw new Error('Participant not found.');
+    const updates = {};
+    updates[payload.fieldName] = payload.value || '';
+    updates.lastUpdatedAt = now;
+    updates.lastUpdatedBy = actor;
+    markDownstreamNeedsReview(updates, payload.fieldName);
+    updateRow(master, masterHeaders, row, updates);
+    appendAudit({ participantId: issue.participantId, actorType: 'staff', actor, action: 'fixDataQualityField', section: 'data_quality', notes: payload.fieldName });
+  } else if (action === 'merge_duplicate') {
+    if (!payload.survivingParticipantId) throw new Error('merge_duplicate requires survivingParticipantId.');
+    const losingId = payload.losingParticipantId || issue.participantId;
+    markDuplicateRecord(losingId, payload.survivingParticipantId, actor, payload.notes || issue.notes || '');
+  }
+
+  const status = action === 'merge_duplicate' ? 'merged' : (action === 'mark_not_duplicate' ? 'dismissed' : 'resolved');
+  updateRow(sheet, headers, issueRow, {
+    status,
+    resolution: action,
+    resolvedBy: actor,
+    resolvedAt: now,
+    notes: [issue.notes, payload.notes].filter(Boolean).join(' | ')
+  });
+  appendAudit({
+    participantId: issue.participantId,
+    actorType: 'staff',
+    actor,
+    action: 'resolveDataQualityIssue',
+    section: 'data_quality',
+    notes: issue.issueId + ' | ' + action
+  });
+  return { status: 'OK', issueId: issue.issueId, resolution: action };
+}
+
+function findDataQualityIssueRow(sheet, headers, issueId) {
+  if (!issueId || sheet.getLastRow() < 2) return -1;
+  const idIdx = headers.indexOf('issueId');
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][idIdx] || '') === String(issueId)) return i + 2;
+  }
+  return -1;
+}
+
+function markDownstreamNeedsReview(updates, fieldName) {
+  const participantFields = ['surname','firstName','otherNames','dob','sex','telephone','ghanaCardId','region','district','educationLevel','employmentStatus'];
+  const placementFields = ['employerName','placedByPartner','placementStartDate','plJobRole','employmentType'];
+  if (participantFields.includes(fieldName)) {
+    updates.capacityBuildingStatus = 'needs_review';
+    updates.jobPlacementStatus = 'needs_review';
+  } else if (placementFields.includes(fieldName)) {
+    updates.jobPlacementStatus = 'needs_review';
+  }
+}
+
+function markDuplicateRecord(losingParticipantId, survivingParticipantId, actor, notes) {
+  if (!losingParticipantId || !survivingParticipantId) throw new Error('Both losing and surviving participant IDs are required.');
+  const master = getMasterSheet();
+  const headers = ensureHeaders(master, MASTER_HEADERS);
+  const row = findParticipantRow(master, headers, { participantId: losingParticipantId });
+  if (row < 1) throw new Error('Losing participant not found.');
+  const now = new Date().toISOString();
+  updateRow(master, headers, row, {
+    currentStage: 'archived',
+    overallStatus: 'duplicate',
+    participantInfoStatus: 'needs_review',
+    capacityBuildingStatus: 'needs_review',
+    jobPlacementStatus: 'needs_review',
+    adminNotes: 'DUPLICATE of ' + survivingParticipantId + (notes ? ' | ' + notes : ''),
+    lastUpdatedAt: now,
+    lastUpdatedBy: actor
+  });
+  appendAudit({
+    participantId: losingParticipantId,
+    actorType: 'staff',
+    actor,
+    action: 'mergeDuplicate',
+    section: 'data_quality',
+    notes: 'Surviving participant: ' + survivingParticipantId
+  });
+}
+
 function pickKnownFields(payload, headers) {
   const picked = {};
   headers.forEach(h => { if (Object.prototype.hasOwnProperty.call(payload, h)) picked[h] = payload[h]; });
@@ -953,34 +1452,58 @@ function fromSheetValue(v) {
 
 // ─── STATUS HELPERS ───────────────────────────────────────────────────────────
 function resolveCapacityStatus(existing, incoming, explicitSection, accessMode) {
-  if (existing.capacityBuildingStatus === 'submitted') return 'submitted';
-  if (explicitSection === 'capacity' || accessMode === 'capacity-existing') return 'submitted';
-  // capacity-new: only mark submitted if the participant was actually trained
-  if (accessMode === 'capacity-new' && incoming.trainedByPartner === 'Yes') return 'submitted';
-  if (accessMode === 'admin' && incoming.trainedByPartner === 'Yes') return 'submitted';
-  return existing.capacityBuildingStatus || 'not_started';
+  if (isCompleteStatus(existing.capacityBuildingStatus)) return 'complete';
+  if (explicitSection === 'capacity' || accessMode === 'capacity-existing') return 'complete';
+  // capacity-new: only mark complete if the participant was actually trained
+  if (accessMode === 'capacity-new' && incoming.trainedByPartner === 'Yes') return 'complete';
+  if (accessMode === 'admin' && incoming.trainedByPartner === 'Yes') return 'complete';
+  return normalizeLifecycleStatus(existing.capacityBuildingStatus || 'not_started');
 }
 
 function resolvePlacementStatus(existing, incoming, explicitSection, accessMode) {
-  if (existing.jobPlacementStatus === 'submitted') return 'submitted';
-  if (explicitSection === 'placement') return 'submitted';
-  if (accessMode === 'admin' && incoming.placedByPartner === 'Yes') return 'submitted';
-  return existing.jobPlacementStatus || 'not_started';
+  if (isCompleteStatus(existing.jobPlacementStatus)) return 'complete';
+  if (explicitSection === 'placement') return 'complete';
+  if (accessMode === 'admin' && incoming.placedByPartner === 'Yes') return 'complete';
+  return normalizeLifecycleStatus(existing.jobPlacementStatus || 'not_started');
 }
 
 function buildLockedSections(capacityStatus, placementStatus) {
   const locked = [];
-  if (capacityStatus === 'submitted')  locked.push('capacityBuilding');
-  if (placementStatus === 'submitted') locked.push('jobPlacement');
+  if (isCompleteStatus(capacityStatus))  locked.push('capacityBuilding');
+  if (isCompleteStatus(placementStatus)) locked.push('jobPlacement');
   return locked.join(',');
 }
 
-function resolveStage(capacityStatus, placementStatus, employerName) {
-  // Require employer name to be present before granting placement_complete
-  if (placementStatus === 'submitted' && employerName) return 'placement_complete';
-  if (placementStatus === 'submitted') return 'capacity_complete'; // flag set but no employer data
-  if (capacityStatus === 'submitted')  return 'capacity_complete';
-  return 'registration_complete';
+function normalizeLifecycleStatus(value) {
+  const status = String(value || '').trim();
+  if (!status) return 'not_started';
+  if (status === 'submitted') return 'complete';
+  if (status === 'placement_complete' || status === 'registration_complete' || status === 'capacity_complete') return 'complete';
+  return status;
+}
+
+function isCompleteStatus(value) {
+  return normalizeLifecycleStatus(value) === 'complete';
+}
+
+function normalizeStage(value) {
+  const stage = String(value || '').trim();
+  if (stage === 'registration' || stage === 'registration_complete') return 'participant_information';
+  if (stage === 'capacity_complete') return 'cv_upload';
+  if (stage === 'placement_complete') return 'outcome_tracking';
+  return stage || 'consent';
+}
+
+function resolveStage(record) {
+  if (isCompleteStatus(record.jobPlacementStatus)) return 'outcome_tracking';
+  if (isCompleteStatus(record.capacityBuildingStatus)) return 'cv_upload';
+  if (isCompleteStatus(record.participantInfoStatus)) return 'cv_upload';
+  if (isCompleteStatus(record.consentStatus)) return 'participant_information';
+  return normalizeStage(record.currentStage || 'consent');
+}
+
+function countComplete(records, field) {
+  return records.filter(r => isCompleteStatus(r[field])).length;
 }
 
 function countWhere(records, field, value) {
@@ -1045,7 +1568,7 @@ function getEligibleForPlacement(password) {
   const eligible = records
     .filter(function(r) {
       // Include all consented participants who have not yet been placed
-      return r.consentStatus === 'complete' && r.jobPlacementStatus !== 'submitted';
+      return r.consentStatus === 'complete' && !isCompleteStatus(r.jobPlacementStatus);
     })
     .map(function(r) {
       return {
@@ -1132,7 +1655,7 @@ function submitPlacementBatch(payload) {
       const row = findParticipantRow(master, headers, { participantId: pid });
       if (row < 1) throw new Error('Participant not found');
       const existing = rowToObject(headers, master.getRange(row, 1, 1, headers.length).getValues()[0]);
-      if (existing.jobPlacementStatus === 'submitted') throw new Error('Already placed');
+      if (isCompleteStatus(existing.jobPlacementStatus)) throw new Error('Already placed');
 
       // Write to Job Placement sheet
       const placementRecord = Object.assign({}, existing, {
@@ -1155,12 +1678,18 @@ function submitPlacementBatch(payload) {
         contractType:        payload.contractType       || '',
         workHours:           payload.workHours          || ''
       });
+      runDataQualityChecks(placementRecord, master, headers);
+      const transition = validateTransition(existing.currentStage || 'cv_upload', 'outcome_tracking', placementRecord, {
+        actorType: 'staff',
+        actor: actor
+      });
+      if (!transition.ok) throw new Error('CONFLICT: ' + transition.errors.join(' '));
       appendJobPlacement(placementRecord);
 
       // Update Master record — write all placement fields so dashboard/report reads are correct
       updateRow(master, headers, row, {
-        jobPlacementStatus:  'submitted',
-        currentStage:        'placement_complete',
+        jobPlacementStatus:  'complete',
+        currentStage:        'outcome_tracking',
         batchId:             batchId,
         employerName:        payload.employerName        || '',
         placedByPartner:     payload.placedByPartner     || '',
@@ -1328,7 +1857,7 @@ function bulkSetPartner(payload) {
     const row = rows[i];
     const currentPartner = String(row[partnerIdx] || '').trim();
     const infoStatus     = String(row[piIdx]       || '').trim();
-    if (currentPartner || infoStatus !== 'submitted') continue;
+    if (currentPartner || !isCompleteStatus(infoStatus)) continue;
 
     master.getRange(i + 2, partnerIdx + 1).setValue(partner);
     master.getRange(i + 2, headers.indexOf('lastUpdatedAt') + 1).setValue(now);
@@ -1360,11 +1889,56 @@ function runBulkSetPartner() {
 }
 
 // ─── JOB ROLE CLASSIFIER (server-side mirror of client classifyJobRole) ───────
+const JOB_ROLE_EXACT_CATEGORY = {
+  'BIM Coordinator': 'Technical',
+  'Bullion Driver': 'Skilled Trades',
+  'Bus Driver': 'Skilled Trades',
+  'Contract Administrator': 'Administrative',
+  'Delivery Driver': 'Skilled Trades',
+  'Dispatcher': 'Administrative',
+  'Environmental Coordinator': 'Technical',
+  'Executive Housekeeper': 'Support Services',
+  'Farm Administrator': 'Administrative',
+  'Fire Management Officer': 'Technical',
+  'Fleet Mechanic': 'Skilled Trades',
+  'Freight Forwarder': 'Administrative',
+  'Front Desk': 'Administrative',
+  'HGV Driver': 'Skilled Trades',
+  'Hospital Administrator': 'Management',
+  'HR Business Partner': 'Administrative',
+  'HR Coordinator': 'Administrative',
+  'IT Helpdesk': 'Support Services',
+  'Land Rights Coordinator': 'Administrative',
+  'Livestock Hauler': 'Skilled Trades',
+  'Logging Truck Driver': 'Skilled Trades',
+  'Logistics Coordinator': 'Administrative',
+  'Maintenance Engineer': 'Skilled Trades',
+  'Medical Secretary': 'Administrative',
+  'Mobile Money Coordinator': 'Administrative',
+  'Post-Construction Cleaner': 'Support Services',
+  'Relationship Manager': 'Administrative',
+  'Room Attendant': 'Support Services',
+  'Safety Officer': 'Technical',
+  'Sales Associate': 'Administrative',
+  'Shuttle Driver': 'Skilled Trades',
+  'Supply Chain Coordinator': 'Administrative',
+  'Systems Admin': 'Technical',
+  'Tipper Driver': 'Skilled Trades',
+  'Transport Safety Officer': 'Technical',
+  'Trawler Deckhand': 'Skilled Trades',
+  'Ventilation Officer': 'Technical',
+  'WMS Admin': 'Technical'
+};
+
 function classifyJobRoleServer(role) {
-  const text = String(role || '').toLowerCase();
-  if (/\b(manager|director|principal|dean|registrar|administrator|superintendent|cto|lead|head)\b/.test(text)) return 'Management';
-  if (/\b(accountant|bookkeeper|officer|coordinator|specialist|analyst|secretary|clerk|cashier|teller|buyer|recruiter|writer|controller|auditor|agent|rep|representative|relationship|records|admissions|documentation|dispatcher)\b/.test(text)) return 'Administrative';
-  if (/\b(cleaner|security|guard|driver|loader|laborer|worker|operator|attendant|hand|janitor|gardener|courier|picker|stocker|sanitation|bellhop|housekeeper|laundry|storekeeper|helper|assistant)\b/.test(text)) return 'Support';
+  const title = String(role || '').trim();
+  if (JOB_ROLE_EXACT_CATEGORY[title]) return JOB_ROLE_EXACT_CATEGORY[title];
+  const text = title.toLowerCase().replace(/[^a-z0-9\s&/+-]/g, ' ');
+  if (/\b(manager|director|supervisor|principal|dean|registrar|administrator|superintendent|cto|lead|head|owner|chief)\b/.test(text)) return 'Management';
+  if (/\b(engineer|scientist|developer|designer|programmer|analyst|doctor|nurse|pharmacist|teacher|lecturer|architect|consultant|specialist|technician|biologist|surgeon|agronomist|geologist|data scientist|ai|ml|cybersecurity|product manager|research|lab)\b/.test(text)) return 'Technical';
+  if (/\b(accountant|bookkeeper|clerk|secretary|cashier|teller|buyer|recruiter|records|admissions|dispatcher|procurement|compliance|hr|customer service|sales|agent|representative|inventory|documentation|officer|assistant|coordinator|admin)\b/.test(text)) return 'Administrative';
+  if (/\b(electrician|plumber|carpenter|mason|bricklayer|welder|mechanic|painter|tailor|barber|cook|chef|baker|driver|hauler|deckhand|roughneck|roustabout|installer|repairer|machinist|artisan|fitter|forester|ranger|operator)\b/.test(text)) return 'Skilled Trades';
+  if (/\b(cleaner|security|guard|porter|helper|attendant|laborer|courier|janitor|gardener|warehouse|picker|stocker|loader|bellhop|housekeeper|sanitation|shelf|storekeeper|assistant|hand|worker)\b/.test(text)) return 'Support Services';
   return 'Technical';
 }
 
@@ -1425,7 +1999,8 @@ function initConsent(payload) {
       lastUpdatedAt:              now,
       lastUpdatedBy:              'participant',
       participantPhoneNormalized: phone,
-      participantEmailNormalized: email
+      participantEmailNormalized: email,
+      overallStatus:              'active'
     });
     rowIndex = existingRow;
   } else {
@@ -1451,6 +2026,7 @@ function initConsent(payload) {
       capacityBuildingStatus:     'not_started',
       jobPlacementStatus:         'not_started',
       currentStage:               'registration',
+      overallStatus:              'active',
       lockedSections:             '',
       cvStatus:                   'not_started',
       lastUpdatedAt:              now,
@@ -1825,9 +2401,110 @@ function previewBulkImportedRecords(password) {
   return { status: 'OK', count: count, total: rows.length };
 }
 
+function cleanupOrphanedSubsheetRows(payload) {
+  payload = payload || {};
+  const pwd = getAdminPassword();
+  if (!pwd || payload.adminPassword !== pwd) throw new Error('Admin access required.');
+
+  const dryRun = payload.dryRun !== false;
+  const actor = payload.actor || 'admin';
+  const targetSheets = payload.sheetNames && payload.sheetNames.length
+    ? payload.sheetNames
+    : [PARTICIPANT_INFO_SHEET_NAME, CAPACITY_BUILDING_SHEET_NAME, JOB_PLACEMENT_SHEET_NAME];
+
+  const master = getMasterSheet();
+  const masterHeaders = ensureHeaders(master, MASTER_HEADERS);
+  const masterIds = new Set(getRecords(master, masterHeaders)
+    .map(function(r) { return String(r.participantId || '').trim(); })
+    .filter(Boolean));
+
+  const ss = SpreadsheetApp.openById(KOLLECT_SPREADSHEET_ID);
+  const results = [];
+  var totalOrphans = 0;
+  var totalDeleted = 0;
+
+  targetSheets.forEach(function(name) {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 2) {
+      results.push({ sheetName: name, orphanRows: 0, deletedRows: 0, sampleParticipantIds: [] });
+      return;
+    }
+
+    const lastCol = sheet.getLastColumn();
+    const subHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const pidCol = subHeaders.findIndex(function(h) {
+      return String(h).toUpperCase().trim() === 'PARTICIPANT ID';
+    });
+    if (pidCol < 0) {
+      results.push({ sheetName: name, orphanRows: 0, deletedRows: 0, skipped: 'PARTICIPANT ID header not found.', sampleParticipantIds: [] });
+      return;
+    }
+
+    const subRows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
+    const toDelete = [];
+    const samples = [];
+    for (var i = subRows.length - 1; i >= 0; i--) {
+      const pid = String(subRows[i][pidCol] || '').trim();
+      if (!pid || masterIds.has(pid)) continue;
+      toDelete.push(i + 2);
+      if (samples.length < 10) samples.push(pid);
+    }
+
+    totalOrphans += toDelete.length;
+    if (!dryRun) {
+      toDelete.forEach(function(rowIndex) { sheet.deleteRow(rowIndex); });
+      totalDeleted += toDelete.length;
+    }
+    results.push({
+      sheetName: name,
+      orphanRows: toDelete.length,
+      deletedRows: dryRun ? 0 : toDelete.length,
+      sampleParticipantIds: samples
+    });
+  });
+
+  appendAudit({
+    participantId: '',
+    actorType: 'staff',
+    actor: actor,
+    action: dryRun ? 'previewOrphanedSubsheetRows' : 'cleanupOrphanedSubsheetRows',
+    section: 'data_quality',
+    notes: (dryRun ? 'Previewed ' : 'Deleted ') + totalOrphans + ' orphaned child row(s).'
+  });
+
+  return {
+    status: 'OK',
+    dryRun: dryRun,
+    orphanRows: totalOrphans,
+    deletedRows: totalDeleted,
+    sheets: results,
+    message: dryRun
+      ? 'Preview found ' + totalOrphans + ' orphaned child row(s). Run cleanupOrphanedSubsheetRows with dryRun:false to delete.'
+      : 'Deleted ' + totalDeleted + ' orphaned child row(s).'
+  };
+}
+
 // Run directly from Apps Script editor
 function runRemoveBulkImportedRecords() {
   const pwd    = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
   const result = removeBulkImportedRecords(pwd);
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
+function runPreviewOrphanedSubsheetRows() {
+  const result = cleanupOrphanedSubsheetRows({
+    adminPassword: PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'),
+    dryRun: true,
+    actor: 'admin'
+  });
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
+function runCleanupOrphanedSubsheetRows() {
+  const result = cleanupOrphanedSubsheetRows({
+    adminPassword: PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'),
+    dryRun: false,
+    actor: 'admin'
+  });
   Logger.log(JSON.stringify(result, null, 2));
 }

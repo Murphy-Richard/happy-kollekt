@@ -642,9 +642,13 @@
             </div>
             <div class="field-group">
               <label class="field-label">Job Role</label>
-              <select id="jobRole" class="field-input" disabled>
+              <select id="jobRole" class="field-input" disabled onchange="toggleOtherJobRole('jobRole','jobRoleOther')">
                 <option value="">Select</option>
               </select>
+            </div>
+            <div id="jobRoleOtherGroup" class="field-group hidden">
+              <label class="field-label">Specific Job Role</label>
+              <input type="text" id="jobRoleOther" class="field-input" placeholder="Enter job role" disabled>
             </div>
           </div>
           <div class="field-grid">
@@ -850,9 +854,13 @@
             </div>
             <div class="field-group">
               <label class="field-label required">Job Role</label>
-              <select id="plJobRole" class="field-input" required disabled>
+              <select id="plJobRole" class="field-input" required disabled onchange="toggleOtherJobRole('plJobRole','plJobRoleOther')">
                 <option value="">Select</option>
               </select>
+            </div>
+            <div id="plJobRoleOtherGroup" class="field-group hidden">
+              <label class="field-label required">Specific Job Role</label>
+              <input type="text" id="plJobRoleOther" class="field-input" placeholder="Enter job role" disabled>
             </div>
           </div>
           <div class="field-grid">
@@ -1205,9 +1213,13 @@
           </div>
           <div class="field-group">
             <label class="field-label required">Job Role</label>
-            <select id="batchJobRole" class="field-input" required disabled>
+            <select id="batchJobRole" class="field-input" required disabled onchange="toggleOtherJobRole('batchJobRole','batchJobRoleOther')">
               <option value="">Select</option>
             </select>
+          </div>
+          <div id="batchJobRoleOtherGroup" class="field-group hidden">
+            <label class="field-label required">Specific Job Role</label>
+            <input type="text" id="batchJobRoleOther" class="field-input" placeholder="Enter job role" disabled>
           </div>
         </div>
 
