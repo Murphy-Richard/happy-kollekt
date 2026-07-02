@@ -807,9 +807,11 @@ function openPlacementForm(p) {
   formState.consentName = p.consentName || '';
   initializeForm();
   prefillParticipantInfo(p);
-  // Ensure participant info is editable for admins during placement
-  unlockSectionB();
   showSections({ A: true, B: true, C: false, D: true });
+  // Ensure participant info is editable for admins during placement.
+  // Call after UI toggles and again after a short delay to override any later locks.
+  try { unlockSectionB(); } catch (e) { /* noop */ }
+  setTimeout(() => { try { unlockSectionB(); } catch (e) {} }, 120);
   document.getElementById('mainForm')?.classList.remove('hidden');
   document.getElementById('view-form').classList.remove('hidden');
   document.querySelectorAll('input[name="pl_check"]').forEach(r => { r.checked = r.value === 'Yes'; });
