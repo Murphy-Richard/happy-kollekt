@@ -506,14 +506,18 @@ function lockSectionB() {
 function unlockSectionB() {
   const section = document.getElementById('sectionB');
   if (!section) return;
-  section.querySelectorAll('input, select, textarea').forEach(el => {
-    el.disabled = false;
+  section.querySelectorAll('input, select, textarea, button').forEach(el => {
+    try { el.disabled = false; } catch (e) {}
+    el.removeAttribute && el.removeAttribute('disabled');
+    try { el.readOnly = false; } catch (e) {}
+    el.removeAttribute && el.removeAttribute('readonly');
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') el.setAttribute('aria-disabled', 'false');
+    el.classList && el.classList.remove('readonly');
   });
-  // Remove any lock notice inserted by lockSectionB()
-  const hdr = section.querySelector('h2');
-  if (hdr && hdr.nextElementSibling && hdr.nextElementSibling.tagName === 'P' && hdr.nextElementSibling.textContent.startsWith('Participant information loaded')) {
-    hdr.nextElementSibling.remove();
-  }
+  // Remove any lock notice(s) inserted by lockSectionB()
+  section.querySelectorAll('p').forEach(p => {
+    if (p.textContent && p.textContent.includes('Participant information loaded')) p.remove();
+  });
 }
 
 function prefillParticipantInfo(data) {
