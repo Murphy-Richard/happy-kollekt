@@ -503,6 +503,19 @@ function lockSectionB() {
   section.querySelector('h2').insertAdjacentElement('afterend', notice);
 }
 
+function unlockSectionB() {
+  const section = document.getElementById('sectionB');
+  if (!section) return;
+  section.querySelectorAll('input, select, textarea').forEach(el => {
+    el.disabled = false;
+  });
+  // Remove any lock notice inserted by lockSectionB()
+  const hdr = section.querySelector('h2');
+  if (hdr && hdr.nextElementSibling && hdr.nextElementSibling.tagName === 'P' && hdr.nextElementSibling.textContent.startsWith('Participant information loaded')) {
+    hdr.nextElementSibling.remove();
+  }
+}
+
 function prefillParticipantInfo(data) {
   // When coming straight from consent, we only have consentName + telephone.
   // Split consentName into surname / firstName so the registration fields fill in.
@@ -790,6 +803,8 @@ function openPlacementForm(p) {
   formState.consentName = p.consentName || '';
   initializeForm();
   prefillParticipantInfo(p);
+  // Ensure participant info is editable for admins during placement
+  unlockSectionB();
   showSections({ A: true, B: true, C: false, D: true });
   document.getElementById('mainForm')?.classList.remove('hidden');
   document.getElementById('view-form').classList.remove('hidden');
