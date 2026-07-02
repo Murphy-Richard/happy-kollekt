@@ -543,6 +543,8 @@ function setupEventListeners() {
     localStorage.setItem('happyKollectCollector', e.target.value);
   });
   document.getElementById('telephone').addEventListener('blur', e => validatePhone(e.target));
+  const consentPhoneEl = document.getElementById('consentPhone');
+  if (consentPhoneEl) consentPhoneEl.addEventListener('blur', e => validatePhone(e.target));
   document.getElementById('ghanaCardId').addEventListener('blur', e => validateGhanaCard(e.target));
   window.addEventListener('online', () => { updateOnlineStatus(); syncPendingSubmissions(); });
   window.addEventListener('offline', updateOnlineStatus);
@@ -788,7 +790,6 @@ function openPlacementForm(p) {
   formState.consentName = p.consentName || '';
   initializeForm();
   prefillParticipantInfo(p);
-  lockSectionB();
   showSections({ A: true, B: true, C: false, D: true });
   document.getElementById('mainForm')?.classList.remove('hidden');
   document.getElementById('view-form').classList.remove('hidden');

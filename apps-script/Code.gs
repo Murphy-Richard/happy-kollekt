@@ -654,6 +654,13 @@ function adminUpdateParticipant(payload) {
   delete updates.currentStage;
   delete updates.lockedSections;
   Object.keys(updates).forEach(fieldName => markDownstreamNeedsReview(updates, fieldName));
+  // Normalize contact fields provided by admin to keep formats consistent
+  if (updates.telephone) updates.telephone = toLocalPhone(updates.telephone);
+  if (updates.consentPhone) updates.consentPhone = toLocalPhone(updates.consentPhone);
+  const phoneNorm = normalizePhone(updates.telephone || updates.consentPhone || '');
+  if (phoneNorm) updates.participantPhoneNormalized = phoneNorm;
+  if (updates.consentEmail || updates.email) updates.participantEmailNormalized = normalizeEmail(updates.consentEmail || updates.email);
+
   updates.lastUpdatedAt = new Date().toISOString();
   updates.lastUpdatedBy = payload.actor || 'admin';
   updateRow(master, headers, row, updates);
