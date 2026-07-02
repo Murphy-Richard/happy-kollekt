@@ -493,6 +493,7 @@ function showSections({ A, B, C, D }) {
 }
 
 function lockSectionB() {
+  if (formState.accessMode === 'admin') return;
   const section = document.getElementById('sectionB');
   section.querySelectorAll('input, select, textarea').forEach(el => {
     el.disabled = true;
