@@ -535,6 +535,12 @@ function prefillParticipantInfo(data) {
   if (data.consentPhone && !data.telephone) {
     data = Object.assign({}, data, { telephone: data.consentPhone });
   }
+  if (data.telephone) {
+    data = Object.assign({}, data, { telephone: toLocalPhone(data.telephone) });
+  }
+  if (data.consentPhone) {
+    data = Object.assign({}, data, { consentPhone: toLocalPhone(data.consentPhone) });
+  }
 
   const fields = [
     'participantId','hamisId','onboardingDate','implementingPartner','region','district',
@@ -1308,8 +1314,25 @@ function generateParticipantId() {
 }
 
 // ===== VALIDATION =====
+function toLocalPhone(value) {
+  const d = String(value || '').replace(/\D/g, '');
+  if (!d) return String(value || '');
+  if (d.length === 12 && d.startsWith('233')) return '0' + d.slice(3);
+  if (d.length === 10 && d.startsWith('0')) return d;
+  if (d.length === 9) return '0' + d;
+  if (d.length > 12) {
+    const intlTail = d.slice(-12);
+    if (intlTail.startsWith('233')) return '0' + intlTail.slice(3);
+    const localTail = d.slice(-10);
+    if (localTail.startsWith('0')) return localTail;
+  }
+  return String(value || '');
+}
+
 function validatePhone(input) {
-  const val = input.value.replace(/\D/g,'');
+  const local = toLocalPhone(input.value);
+  if (local !== input.value) input.value = local;
+  const val = local.replace(/\D/g,'');
   if (val && !/^0\d{9}$/.test(val)) {
     showToast('Phone must be 10 digits starting with 0 (e.g., 0244111111)', 'error');
     input.focus();

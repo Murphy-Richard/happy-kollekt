@@ -929,7 +929,10 @@ function findParticipantRow(sheet, headers, criteria) {
     if (criteria.tokenHash     && r[idx.continuationTokenHash]      === criteria.tokenHash)     return i + 2;
     if (criteria.participantId && r[idx.participantId]              === criteria.participantId) return i + 2;
     if (criteria.ghanaCard     && r[idx.ghanaCardNormalized]        === criteria.ghanaCard)     return i + 2;
-    if (criteria.phone         && r[idx.participantPhoneNormalized] === criteria.phone)         return i + 2;
+    if (criteria.phone) {
+      const storedPhone = normalizePhone(r[idx.participantPhoneNormalized] || r[idx.telephone] || r[idx.consentPhone]);
+      if (storedPhone === criteria.phone) return i + 2;
+    }
     if (criteria.email         && criteria.email && r[idx.participantEmailNormalized] === criteria.email) return i + 2;
   }
   return -1;
@@ -1531,8 +1534,15 @@ function hashValue(value) {
 function normalizePhone(value) {
   const d = String(value || '').replace(/\D+/g, '');
   if (!d) return '';
+  if (d.length === 9) return '233' + d;
   if (d.length === 10 && d.startsWith('0')) return '233' + d.slice(1);
-  if (d.length >= 9) return d.slice(-12);
+  if (d.length === 12 && d.startsWith('233')) return d;
+  if (d.length > 12) {
+    const tail = d.slice(-12);
+    if (tail.startsWith('233')) return tail;
+    const localTail = d.slice(-10);
+    if (localTail.startsWith('0')) return '233' + localTail.slice(1);
+  }
   return d;
 }
 
