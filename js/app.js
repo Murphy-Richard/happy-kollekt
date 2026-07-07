@@ -522,6 +522,7 @@ function unlockSectionB() {
 }
 
 function prefillParticipantInfo(data) {
+  const originalData = { ...(data || {}) };
   // When coming straight from consent, we only have consentName + telephone.
   // Split consentName into surname / firstName so the registration fields fill in.
   if (data.consentName && !data.surname && !data.firstName) {
@@ -541,6 +542,9 @@ function prefillParticipantInfo(data) {
   if (data.consentPhone) {
     data = Object.assign({}, data, { consentPhone: toLocalPhone(data.consentPhone) });
   }
+  ['onboardingDate','dob','trainingStartDate','trainingEndDate','placementStartDate'].forEach(field => {
+    if (data[field]) data = Object.assign({}, data, { [field]: toDateInputValue(data[field]) });
+  });
 
   const fields = [
     'participantId','hamisId','onboardingDate','implementingPartner','region','district',
@@ -557,6 +561,55 @@ function prefillParticipantInfo(data) {
   });
   if (data.age) document.getElementById('age').value = data.age;
   if (data.participantTypeAge) document.getElementById('participantTypeAge').value = data.participantTypeAge;
+  applyDependentPrefill(Object.assign({}, originalData, data));
+  if (document.getElementById('dob')?.value && !document.getElementById('age')?.value) calculateAge();
+}
+
+function toDateInputValue(value) {
+  if (!value) return '';
+  if (value instanceof Date && !isNaN(value)) return value.toISOString().slice(0, 10);
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})T/);
+  if (isoMatch) return isoMatch[1];
+  const d = new Date(s);
+  return isNaN(d) ? s : d.toISOString().slice(0, 10);
+}
+
+function setSelectIfPresent(id, value) {
+  const el = document.getElementById(id);
+  if (el && value !== undefined && value !== null && value !== '') el.value = value;
+}
+
+function applyDependentPrefill(data) {
+  if (!data) return;
+  setSelectIfPresent('region', data.region);
+  populateDistricts('region', 'district');
+  setSelectIfPresent('district', data.district);
+
+  setSelectIfPresent('workRegion', data.workRegion);
+  populateDistricts('workRegion', 'workDistrict');
+  setSelectIfPresent('workDistrict', data.workDistrict);
+
+  setSelectIfPresent('placementRegion', data.placementRegion);
+  populateDistricts('placementRegion', 'placementDistrict');
+  setSelectIfPresent('placementDistrict', data.placementDistrict);
+
+  setSelectIfPresent('sector', data.sector);
+  populateIndustries();
+  setSelectIfPresent('industry', data.industry);
+  populateJobTypes();
+  setSelectIfPresent('jobType', data.jobType);
+  populateJobRoles();
+  setSelectIfPresent('jobRole', data.jobRole);
+
+  setSelectIfPresent('plSector', data.plSector);
+  populatePlacementIndustries();
+  setSelectIfPresent('plIndustry', data.plIndustry);
+  populatePlacementJobTypes();
+  setSelectIfPresent('plJobType', data.plJobType);
+  populatePlacementJobRoles();
+  setSelectIfPresent('plJobRole', data.plJobRole);
 }
 
 function setupEventListeners() {
@@ -974,11 +1027,14 @@ function populateRegions() {
   ['region', 'workRegion', 'placementRegion'].forEach(selId => {
     const sel = document.getElementById(selId);
     if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Select Region</option>';
     Object.keys(CONFIG.REGIONS).sort().forEach(region => {
       const opt = document.createElement('option');
       opt.value = region; opt.textContent = region;
       sel.appendChild(opt);
     });
+    if (current) sel.value = current;
   });
 }
 function populateDistricts(regId, distId) {
@@ -2982,8 +3038,25 @@ function renderCorrectionQuality(data) {
   if (!el) return;
   const now = Date.now();
   const fullName = r => ((r.surname || '') + ' ' + (r.firstName || '')).trim() || '—';
+  const normTokens = v => String(v || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(t => t.length > 2);
+  const hasOverlap = (a, b) => {
+    const aTokens = normTokens(a);
+    const bSet = new Set(normTokens(b));
+    return aTokens.length && bSet.size && aTokens.some(t => bSet.has(t));
+  };
+  const phoneDigits = v => String(v || '').replace(/\D/g, '').replace(/^233/, '0');
 
-  const mismatchPx  = data.filter(r => String(r.adminNotes || '').includes('NAME_MISMATCH'));
+  const mismatchPx  = data.filter(r => {
+    const consentName = r.consentName || '';
+    const registered = fullName(r);
+    return String(r.adminNotes || '').includes('NAME_MISMATCH') ||
+      (consentName && registered !== '—' && !hasOverlap(consentName, registered));
+  });
+  const phoneMismatchPx = data.filter(r => {
+    const consentPhone = phoneDigits(r.consentPhone);
+    const registeredPhone = phoneDigits(r.telephone);
+    return consentPhone && registeredPhone && consentPhone !== registeredPhone;
+  });
   const stuckPx     = data.filter(r => {
     if (isCompleteStatus(r.participantInfoStatus)) return false;
     const d = r.consentSubmittedAt ? new Date(r.consentSubmittedAt) : null;
@@ -2993,7 +3066,7 @@ function renderCorrectionQuality(data) {
   const noNamePx    = data.filter(r => isCompleteStatus(r.participantInfoStatus) && !r.surname && !r.firstName);
   const noPartnerPx = data.filter(r => isCompleteStatus(r.participantInfoStatus) && !r.implementingPartner);
 
-  const total = mismatchPx.length + stuckPx.length + badAgePx.length + noNamePx.length + noPartnerPx.length;
+  const total = mismatchPx.length + phoneMismatchPx.length + stuckPx.length + badAgePx.length + noNamePx.length + noPartnerPx.length;
 
   if (!total) {
     el.innerHTML = '<div style="padding:0.75rem;background:#f0fdf4;border-radius:0.5rem;color:#065f46;font-size:0.8rem;font-weight:700;">&#10003; No data quality issues detected.</div>';
@@ -3025,6 +3098,10 @@ function renderCorrectionQuality(data) {
   if (mismatchPx.length) html += issueSection('🔴', '#991b1b', `${mismatchPx.length} name mismatch${mismatchPx.length > 1 ? 'es' : ''} — consent vs. registered`,
     issueTable(['HAPPY ID','Consent Name','Registered Name','Action'],
       mismatchPx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(r.consentName||'—'), escapeHtml(fullName(r)), fixBtn(r.participantId)]))));
+
+  if (phoneMismatchPx.length) html += issueSection('🟠', '#92400e', `${phoneMismatchPx.length} phone mismatch${phoneMismatchPx.length > 1 ? 'es' : ''} — consent vs. registered`,
+    issueTable(['HAPPY ID','Consent Phone','Registered Phone','Action'],
+      phoneMismatchPx.map(r => row([escapeHtml(r.participantId||'—'), escapeHtml(r.consentPhone||'—'), escapeHtml(r.telephone||'—'), fixBtn(r.participantId)]))));
 
   if (stuckPx.length) html += issueSection('🟡', '#92400e', `${stuckPx.length} consented 7+ days ago, not yet registered`,
     issueTable(['HAPPY ID','Name','Consented','Days','Action'],
@@ -3165,7 +3242,16 @@ function loadBatchPlacement() {
   batchSelectedIds = new Set();
   batchSearchTerm = '';
   const searchInput = document.getElementById('batchSearchInput');
-  if (searchInput) searchInput.value = '';
+  if (searchInput) {
+    // Reset value and ensure handlers are set so typing always filters in real time
+    searchInput.value = '';
+    // Use property handlers to ensure a single reliable handler regardless of how listeners
+    // were attached earlier. This avoids missing real-time filtering when the batch view
+    // is opened after initial page load.
+    searchInput.oninput = e => batchSearchParticipants(e.target.value);
+    searchInput.onkeyup  = e => batchSearchParticipants(e.target.value);
+    searchInput.onpaste  = e => setTimeout(() => batchSearchParticipants(searchInput.value), 0);
+  }
   document.getElementById('batchSearchInfo') && (document.getElementById('batchSearchInfo').textContent = '');
   showBatchStep(1);
   // Populate region dropdown once
